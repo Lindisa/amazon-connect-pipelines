@@ -1,0 +1,298 @@
+import sys
+import json
+
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.job import Job
+
+from pyspark.context import SparkContext
+from pyspark.sql.functions import (
+    col,
+    input_file_name,
+    regexp_extract,
+    to_json,
+    length
+)
+from pyspark.sql.types import StructType, ArrayType, MapType
+
+
+# ------------------------------------------------------------
+# Read required Glue job parameters
+# ------------------------------------------------------------
+args = getResolvedOptions(
+    sys.argv,
+    [
+        "JOB_NAME",
+        "source_bucket_name",
+        "source_prefix",
+        "target_bucket_name",
+        "target_prefix"
+    ]
+)
+
+
+# ------------------------------------------------------------
+# Build source and target S3 paths
+# ------------------------------------------------------------
+source_prefix = args["source_prefix"].strip("/")
+target_prefix = args["target_prefix"].strip("/")
+
+source_path = (
+    f"s3://{args['source_bucket_name']}/{source_prefix}/"
+)
+
+target_path = (
+    f"s3://{args['target_bucket_name']}/{target_prefix}/"
+)
+
+
+# ------------------------------------------------------------
+# Initialise Glue and Spark context
+# ------------------------------------------------------------
+sc = SparkContext()
+glue_context = GlueContext(sc)
+spark = glue_context.spark_session
+
+job = Job(glue_context)
+job.init(args["JOB_NAME"], args)
+
+
+print("===== CONTACT EVALUATIONS PRE-PROCESS STARTED =====")
+print(f"Source path: {source_path}")
+print(f"Target path: {target_path}")
+
+
+# ------------------------------------------------------------
+# 1. Read raw Contact Evaluations JSON files from S3.
+#
+# The mapping JSON file is stored directly inside the
+# ContactEvaluations folder and must not be processed as an
+# evaluation record.
+# ------------------------------------------------------------
+source_dynamic_frame = (
+    glue_context.create_dynamic_frame.from_options(
+        connection_type="s3",
+        format="json",
+        format_options={
+            "multiline": True
+        },
+        connection_options={
+            "paths": [source_path],
+            "recurse": True,
+            "groupFiles": "none",
+            "exclusions": json.dumps([
+                "**/eval-to-redshift-mapping.json"
+            ])
+        },
+        transformation_ctx="ContactEvaluationsS3Source"
+    )
+)
+
+
+# ------------------------------------------------------------
+# 2. Convert DynamicFrame to Spark DataFrame.
+# ------------------------------------------------------------
+df = source_dynamic_frame.toDF()
+
+raw_count = df.count()
+
+print(
+    "Raw Contact Evaluation records read from the source: "
+    f"{raw_count}"
+)
+
+
+# ------------------------------------------------------------
+# 3. Stop early if no new records were read.
+# ------------------------------------------------------------
+if raw_count == 0:
+    print("No new Contact Evaluation data to process.")
+    job.commit()
+
+else:
+
+    # --------------------------------------------------------
+    # 4. Add the source S3 object path.
+    #
+    # This is retained in the Parquet output for traceability
+    # and can also be used by the Redshift ETL for duplicate
+    # handling.
+    # --------------------------------------------------------
+    df = df.withColumn(
+        "source_file",
+        input_file_name()
+    )
+
+    print("Source files being processed:")
+
+    df.select("source_file").distinct().show(
+        100,
+        truncate=False
+    )
+
+
+    # --------------------------------------------------------
+    # 5. Extract year, month and day from the source path.
+    #
+    # Expected source structure:
+    #
+    # ContactEvaluations/YYYY/MM/DD/file.json
+    # --------------------------------------------------------
+    date_path_regex = (
+        r"/(\d{4})/(\d{2})/(\d{2})/[^/]+\.json$"
+    )
+
+    df = df.withColumn(
+        "year",
+        regexp_extract(
+            col("source_file"),
+            date_path_regex,
+            1
+        )
+    )
+
+    df = df.withColumn(
+        "month",
+        regexp_extract(
+            col("source_file"),
+            date_path_regex,
+            2
+        )
+    )
+
+    df = df.withColumn(
+        "day",
+        regexp_extract(
+            col("source_file"),
+            date_path_regex,
+            3
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # 6. Count records for which partition values could not
+    # be extracted.
+    # --------------------------------------------------------
+    invalid_partition_count = df.filter(
+        (length(col("year")) == 0)
+        | (length(col("month")) == 0)
+        | (length(col("day")) == 0)
+    ).count()
+
+    print(
+        "Records with missing year/month/day values: "
+        f"{invalid_partition_count}"
+    )
+
+
+    # --------------------------------------------------------
+    # 7. Remove records with invalid partition values.
+    #
+    # This prevents creation of:
+    #
+    # year=__HIVE_DEFAULT_PARTITION__
+    # month=__HIVE_DEFAULT_PARTITION__
+    # day=__HIVE_DEFAULT_PARTITION__
+    # --------------------------------------------------------
+    df = df.filter(
+        (length(col("year")) > 0)
+        & (length(col("month")) > 0)
+        & (length(col("day")) > 0)
+    )
+
+
+    # --------------------------------------------------------
+    # 8. Convert complex fields to JSON strings.
+    #
+    # This includes structures such as:
+    #
+    # - basicQuestions
+    # - sections
+    # - metadata
+    # - evaluationSchema
+    #
+    # The exact fields are detected from the source schema.
+    # --------------------------------------------------------
+    for field in df.schema.fields:
+        if isinstance(
+            field.dataType,
+            (StructType, ArrayType, MapType)
+        ):
+            df = df.withColumn(
+                field.name,
+                to_json(col(field.name))
+            )
+
+
+    # --------------------------------------------------------
+    # 9. Count the final valid records.
+    # --------------------------------------------------------
+    final_count = df.count()
+
+    print(
+        "Final Contact Evaluation records to write: "
+        f"{final_count}"
+    )
+
+
+    # --------------------------------------------------------
+    # 10. Stop if no valid records remain.
+    # --------------------------------------------------------
+    if final_count == 0:
+        print(
+            "No valid Contact Evaluation records remain "
+            "after partition filtering."
+        )
+
+        job.commit()
+
+    else:
+
+        print("Sample records before writing:")
+
+        df.show(
+            10,
+            truncate=False
+        )
+
+
+        # ----------------------------------------------------
+        # 11. Convert the DataFrame back to a DynamicFrame.
+        # ----------------------------------------------------
+        output_dynamic_frame = DynamicFrame.fromDF(
+            df,
+            glue_context,
+            "ContactEvaluationsOutput"
+        )
+
+
+        # ----------------------------------------------------
+        # 12. Write Parquet files partitioned by date.
+        # ----------------------------------------------------
+        glue_context.write_dynamic_frame.from_options(
+            frame=output_dynamic_frame,
+            connection_type="s3",
+            connection_options={
+                "path": target_path,
+                "partitionKeys": [
+                    "year",
+                    "month",
+                    "day"
+                ]
+            },
+            format="parquet",
+            transformation_ctx="ContactEvaluationsS3Target"
+        )
+
+
+        print(
+            "Successfully wrote Contact Evaluations "
+            "Parquet records."
+        )
+
+        job.commit()
+
+
+print("===== CONTACT EVALUATIONS PRE-PROCESS COMPLETED =====")

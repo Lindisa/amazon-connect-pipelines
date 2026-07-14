@@ -1,0 +1,162 @@
+name: Dev Terraform Pipeline
+
+# Workflow to deploy infrastructure to dev
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - "infra/env/dev/**"
+      - "infra/modules/**"
+      - ".github/workflows/**"
+      - "scripts/**"
+
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_WORKING_DIR: infra/env/dev
+  PLAN_FILE: tfplan
+  PLAN_S3_KEY: artifacts/dev/contact-evaluations/${{ github.run_id }}/tfplan
+
+jobs:
+  validate:
+    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    environment: dev
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: infra/env/dev
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch Netskope certificate
+        run: |
+          aws s3 cp \
+            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            ./bundle.pem
+
+      - name: Configure SSL certificate
+        run: |
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/
+          sudo update-ca-trust
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> $GITHUB_ENV
+
+      - name: Install Terraform
+        run: |
+          sudo yum install -y yum-utils
+          sudo yum-config-manager \
+            --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          sudo yum -y install terraform
+          terraform --version
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+  plan:
+    needs:
+      - validate
+
+    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    environment: dev
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: infra/env/dev
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch Netskope certificate
+        run: |
+          aws s3 cp \
+            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            ./bundle.pem
+
+      - name: Configure SSL certificate
+        run: |
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/
+          sudo update-ca-trust
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> $GITHUB_ENV
+
+      - name: Install Terraform
+        run: |
+          sudo yum install -y yum-utils
+          sudo yum-config-manager \
+            --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          sudo yum -y install terraform
+          terraform --version
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -out=${{ env.PLAN_FILE }}
+
+      - name: Upload tfplan to S3
+        run: |
+          aws s3 cp \
+            ${{ env.PLAN_FILE }} \
+            s3://${{ vars.ARTIFACTS_BUCKET_NAME }}/${{ env.PLAN_S3_KEY }}
+
+  apply:
+    needs:
+      - plan
+
+    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    environment: dev
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: infra/env/dev
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch Netskope certificate
+        run: |
+          aws s3 cp \
+            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            ./bundle.pem
+
+      - name: Configure SSL certificate
+        run: |
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/
+          sudo update-ca-trust
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> $GITHUB_ENV
+
+      - name: Install Terraform
+        run: |
+          sudo yum install -y yum-utils
+          sudo yum-config-manager \
+            --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          sudo yum -y install terraform
+          terraform --version
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Download tfplan
+        run: |
+          aws s3 cp \
+            s3://${{ vars.ARTIFACTS_BUCKET_NAME }}/${{ env.PLAN_S3_KEY }} \
+            ${{ env.PLAN_FILE }}
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve ${{ env.PLAN_FILE }}
