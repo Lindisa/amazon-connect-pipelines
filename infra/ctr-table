@@ -1,10 +1,7 @@
 CREATE TABLE IF NOT EXISTS public.ctr_flattened
 (
-    -- ========================================================
-    -- Main contact fields
-    -- ========================================================
-    aws_account_id                          VARCHAR(32),
-    aws_ctr_format_version                  VARCHAR(32),
+    aws_account_id                          VARCHAR(100),
+    aws_ctr_format_version                  VARCHAR(100),
 
     contact_id                              VARCHAR(256) NOT NULL,
     contact_association_id                  VARCHAR(256),
@@ -13,7 +10,7 @@ CREATE TABLE IF NOT EXISTS public.ctr_flattened
     next_contact_id                         VARCHAR(256),
 
     instance_arn                            VARCHAR(2048),
-    channel                                 VARCHAR(64),
+    channel                                 VARCHAR(100),
     initiation_method                       VARCHAR(128),
     disconnect_reason                       VARCHAR(256),
     answering_machine_detection_status      VARCHAR(256),
@@ -26,18 +23,12 @@ CREATE TABLE IF NOT EXISTS public.ctr_flattened
     scheduled_timestamp                     TIMESTAMPTZ,
     transfer_completed_timestamp            TIMESTAMPTZ,
     last_update_timestamp                   TIMESTAMPTZ,
-
-    -- ========================================================
-    -- Agent fields
-    -- ========================================================
     agent_arn                               VARCHAR(2048),
     agent_active_region                     VARCHAR(64),
     agent_username                          VARCHAR(512),
-
     agent_after_contact_work_duration       BIGINT,
     agent_after_contact_work_start_ts       TIMESTAMPTZ,
     agent_after_contact_work_end_ts         TIMESTAMPTZ,
-
     agent_initiated_hold_duration           BIGINT,
     agent_interaction_duration              BIGINT,
     agent_connected_timestamp               TIMESTAMPTZ,
@@ -56,75 +47,35 @@ CREATE TABLE IF NOT EXISTS public.ctr_flattened
 
     agent_hierarchy_groups                  SUPER,
     agent_state_transitions                 SUPER,
-
-    -- ========================================================
-    -- Campaign
-    -- ========================================================
     campaign_id                             VARCHAR(512),
-
-    -- ========================================================
-    -- Customer endpoint
-    -- ========================================================
     customer_endpoint_address               VARCHAR(2048),
     customer_endpoint_type                  VARCHAR(256),
-
-    -- ========================================================
-    -- System endpoint
-    -- ========================================================
     system_endpoint_address                 VARCHAR(2048),
     system_endpoint_type                    VARCHAR(256),
-
-    -- ========================================================
-    -- Transferred-to endpoint
-    -- ========================================================
     transferred_to_endpoint_address         VARCHAR(2048),
     transferred_to_endpoint_type            VARCHAR(256),
-
-    -- ========================================================
-    -- Queue
-    -- ========================================================
     queue_arn                               VARCHAR(2048),
     queue_name                              VARCHAR(1024),
     queue_duration                          BIGINT,
     queue_enqueue_timestamp                 TIMESTAMPTZ,
     queue_dequeue_timestamp                 TIMESTAMPTZ,
-
-    -- ========================================================
-    -- Singular Recording object
-    -- ========================================================
     recording_deletion_reason               VARCHAR(2048),
     recording_location                      VARCHAR(65535),
     recording_status                        VARCHAR(256),
     recording_type                          VARCHAR(256),
-
-    -- ========================================================
-    -- Contact Lens
-    -- ========================================================
     contact_lens_enabled                    BOOLEAN,
     contact_lens_language_locale            VARCHAR(128),
-
     contact_lens_analytics_modes            SUPER,
-
     contact_lens_redaction_behavior         VARCHAR(128),
     contact_lens_redaction_entities         SUPER,
     contact_lens_redaction_mask_mode        VARCHAR(128),
     contact_lens_redaction_policy           VARCHAR(256),
-
     contact_lens_sentiment_behavior         VARCHAR(128),
     contact_lens_summary_configuration      SUPER,
-
-    -- ========================================================
-    -- Quality metrics
-    -- ========================================================
     quality_agent_audio_score               DOUBLE PRECISION,
     quality_agent_audio_issues              SUPER,
-
     quality_customer_audio_score            DOUBLE PRECISION,
     quality_customer_audio_issues           SUPER,
-
-    -- ========================================================
-    -- Known contact attributes
-    -- ========================================================
     attribute_analytics_provider            VARCHAR(1024),
     attribute_caller_cif_key                VARCHAR(1024),
     attribute_caller_id_number              VARCHAR(1024),
@@ -134,7 +85,6 @@ CREATE TABLE IF NOT EXISTS public.ctr_flattened
     attribute_contact_flow_id               VARCHAR(512),
     attribute_context_manager_session_id    VARCHAR(512),
     attribute_customer_number               VARCHAR(512),
-
     attribute_is_analytics_enabled          VARCHAR(64),
     attribute_is_authenticated              VARCHAR(64),
     attribute_is_chat_analytics_enabled     VARCHAR(64),
@@ -142,7 +92,6 @@ CREATE TABLE IF NOT EXISTS public.ctr_flattened
     attribute_is_screen_recording_enabled   VARCHAR(64),
     attribute_is_speech_analytics_enabled   VARCHAR(64),
     attribute_is_survey_enabled             VARCHAR(64),
-
     attribute_survey_id                     VARCHAR(512),
     attribute_account_no                    VARCHAR(1024),
     attribute_all_linked_accounts           VARCHAR(65535),
@@ -161,13 +110,7 @@ CREATE TABLE IF NOT EXISTS public.ctr_flattened
     attribute_send_to                       VARCHAR(256),
     attribute_status_fica                   VARCHAR(128),
     attribute_fic_complete                  VARCHAR(64),
-
-    -- Full dynamic Attributes object
     attributes                              SUPER,
-
-    -- ========================================================
-    -- Fields inside Attributes.callData
-    -- ========================================================
     call_data_default_ani                   VARCHAR(512),
     call_data_cif_key                       VARCHAR(1024),
     call_data_id_number                     VARCHAR(1024),
@@ -179,36 +122,18 @@ CREATE TABLE IF NOT EXISTS public.ctr_flattened
     call_data_context_id                    VARCHAR(512),
     call_data_is_identified                 VARCHAR(64),
     call_data_is_authenticated              VARCHAR(64),
-
-    -- Preserve the full nested callData object
     call_data                               SUPER,
-
-    -- ========================================================
-    -- Known tags
-    -- ========================================================
     tag_billing_cost_center                 VARCHAR(512),
     tag_billing_department                  VARCHAR(1024),
     tag_billing_division                    VARCHAR(1024),
     tag_speech_analytics                    VARCHAR(512),
     tag_aws_connect_instance_id             VARCHAR(512),
     tag_aws_connect_system_endpoint         VARCHAR(512),
-
-    -- Full dynamic Tags object
     tags                                    SUPER,
-
-    -- ========================================================
-    -- Segment attributes
-    -- ========================================================
     segment_connect_subtype                 VARCHAR(1024),
-
     segment_purpose_analytics_reference     VARCHAR(1024),
     segment_purpose_contact_search_reference VARCHAR(1024),
-
     segment_attributes                      SUPER,
-
-    -- ========================================================
-    -- Other complex structures
-    -- ========================================================
     contact_details                         SUPER,
     customer_voice_activity                 SUPER,
     task_template_info                      SUPER,
@@ -218,17 +143,9 @@ CREATE TABLE IF NOT EXISTS public.ctr_flattened
     contact_routing_data                    SUPER,
     external_third_party                    SUPER,
     disconnect_details                      SUPER,
-
-    -- ========================================================
-    -- Arrays
-    -- ========================================================
     media_streams                           SUPER,
     recordings                              SUPER,
     references_data                         SUPER,
-
-    -- ========================================================
-    -- Pipeline audit fields
-    -- ========================================================
     source_file                             VARCHAR(65535),
     etl_loaded_timestamp                    TIMESTAMPTZ DEFAULT GETDATE(),
 
