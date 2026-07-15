@@ -1,3 +1,11 @@
+SELECT
+    evaluation_id,
+    COUNT(*) AS record_count
+FROM public.contact_evaluations
+GROUP BY evaluation_id
+HAVING COUNT(*) > 1
+ORDER BY record_count DESC;
+
 -- ============================================================
 -- MAIN TARGET TABLE
 -- ============================================================
