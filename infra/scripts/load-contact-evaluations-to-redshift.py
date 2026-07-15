@@ -18,7 +18,8 @@ from pyspark.sql.functions import (
     trim,
     row_number,
     sha2,
-    struct
+    struct,
+    to_timestamp
 )
 from pyspark.sql.types import (
     StructType,
@@ -181,7 +182,44 @@ def build_partition_predicate(lookback_days):
 
 
 # ------------------------------------------------------------
-# Get a field from metadata.
+# Safely convert Contact Evaluation timestamp values.
+#
+# Valid examples:
+# 2023-12-06T14:03:51Z
+# 2023-12-06T14:03:51.969Z
+# 2023-12-06 14:03:51
+# 2023-12-06 14:03:51.969
+# 2023-12-06T14:03:51+00:00
+#
+# Invalid values and timestamp format placeholders become NULL.
+# ------------------------------------------------------------
+def clean_timestamp(column_expression):
+    cleaned_value = trim(
+        column_expression.cast(StringType())
+    )
+
+    valid_timestamp_pattern = (
+        r"^\d{4}-\d{2}-\d{2}"
+        r"[T ]"
+        r"\d{2}:\d{2}:\d{2}"
+        r"(\.\d+)?"
+        r"(Z|[+-]\d{2}:?\d{2})?$"
+    )
+
+    return when(
+        cleaned_value.isNull()
+        | (cleaned_value == "")
+        | cleaned_value.contains("YYYY-MM-DD")
+        | cleaned_value.startswith("[")
+        | (~cleaned_value.rlike(valid_timestamp_pattern)),
+        lit(None).cast(TimestampType())
+    ).otherwise(
+        to_timestamp(cleaned_value)
+    )
+
+
+# ------------------------------------------------------------
+# Read a field from metadata.
 #
 # The preprocess job normally stores metadata as a JSON string,
 # but StructType is also supported as a defensive fallback.
@@ -270,7 +308,9 @@ def transform_source_dataframe(source_df):
         for column_name in original_columns
     ]
 
-    if len(lowercase_columns) != len(set(lowercase_columns)):
+    if len(lowercase_columns) != len(
+        set(lowercase_columns)
+    ):
         raise ValueError(
             "Lowercasing the source column names would create "
             "duplicate column names."
@@ -287,7 +327,7 @@ def transform_source_dataframe(source_df):
 
 
     # --------------------------------------------------------
-    # 2. Rename the top-level Contact Evaluation fields
+    # 2. Rename top-level Contact Evaluation fields
     # --------------------------------------------------------
     if "schemaversion" in spark_df.columns:
         spark_df = spark_df.withColumnRenamed(
@@ -318,8 +358,8 @@ def transform_source_dataframe(source_df):
     # --------------------------------------------------------
     # 3. Extract Contact Evaluation metadata fields
     #
-    # Metadata should normally be a JSON string after the
-    # preprocess job, but StructType is also supported.
+    # Timestamp fields are initially extracted as strings.
+    # They are cleaned and converted separately.
     # --------------------------------------------------------
     if "metadata" in spark_df.columns:
         metadata_type = (
@@ -379,13 +419,13 @@ def transform_source_dataframe(source_df):
                 "evaluation_start_timestamp",
                 "evaluationStartTimestamp",
                 "$.evaluationStartTimestamp",
-                TimestampType()
+                StringType()
             ),
             (
                 "evaluation_submit_timestamp",
                 "evaluationSubmitTimestamp",
                 "$.evaluationSubmitTimestamp",
-                TimestampType()
+                StringType()
             ),
             (
                 "creator",
@@ -445,7 +485,7 @@ def transform_source_dataframe(source_df):
                 "evaluation_acknowledged_timestamp",
                 "evaluationAcknowledgedTimestamp",
                 "$.evaluationAcknowledgedTimestamp",
-                TimestampType()
+                StringType()
             ),
             (
                 "evaluation_acknowledged_by_user_name",
@@ -481,6 +521,31 @@ def transform_source_dataframe(source_df):
             "evaluation_score_percentage",
             get_score_percentage(
                 metadata_type
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # Clean and convert timestamp fields
+        # ----------------------------------------------------
+        spark_df = spark_df.withColumn(
+            "evaluation_start_timestamp",
+            clean_timestamp(
+                col("evaluation_start_timestamp")
+            )
+        )
+
+        spark_df = spark_df.withColumn(
+            "evaluation_submit_timestamp",
+            clean_timestamp(
+                col("evaluation_submit_timestamp")
+            )
+        )
+
+        spark_df = spark_df.withColumn(
+            "evaluation_acknowledged_timestamp",
+            clean_timestamp(
+                col("evaluation_acknowledged_timestamp")
             )
         )
 
@@ -575,8 +640,6 @@ def transform_source_dataframe(source_df):
     # The preprocess job normally already performs this.
     # Structs, arrays and maps are handled again only as a
     # defensive fallback.
-    #
-    # Missing values remain genuine SQL NULL.
     # --------------------------------------------------------
     schema_types = {
         field.name: field.dataType
@@ -639,7 +702,9 @@ def transform_source_dataframe(source_df):
 # Add missing columns and enforce required Spark data types
 # ------------------------------------------------------------
 def align_target_schema(spark_df):
-    existing_columns = set(spark_df.columns)
+    existing_columns = set(
+        spark_df.columns
+    )
 
 
     # --------------------------------------------------------
@@ -760,8 +825,6 @@ def align_target_schema(spark_df):
 
     # --------------------------------------------------------
     # 12. Clean EvaluationId once
-    #
-    # NULL, empty and whitespace-only values become SQL NULL.
     # --------------------------------------------------------
     spark_df = spark_df.withColumn(
         "evaluation_id",
@@ -781,7 +844,6 @@ def align_target_schema(spark_df):
 # Deterministically keep one row per EvaluationId in this run
 # ------------------------------------------------------------
 def remove_duplicate_evaluation_ids(valid_df):
-    # A stable row hash is used as the final tie-breaker.
     valid_df = valid_df.withColumn(
         "__row_hash",
         sha2(
@@ -831,7 +893,9 @@ def remove_duplicate_evaluation_ids(valid_df):
         valid_df
         .withColumn(
             "__duplicate_row_number",
-            row_number().over(duplicate_window)
+            row_number().over(
+                duplicate_window
+            )
         )
         .filter(
             col("__duplicate_row_number") == 1
@@ -845,9 +909,6 @@ def remove_duplicate_evaluation_ids(valid_df):
 
 # ------------------------------------------------------------
 # Main Glue job
-#
-# Using return rather than sys.exit prevents successful no-data
-# runs from being reported by Glue as SYSTEM_EXIT_ERROR.
 # ------------------------------------------------------------
 def main():
     # --------------------------------------------------------
@@ -1007,6 +1068,25 @@ def main():
 
 
     # --------------------------------------------------------
+    # Count invalid timestamp rows for visibility
+    # --------------------------------------------------------
+    print(
+        "Rows with NULL evaluation_start_timestamp: "
+        f"{prepared_df.filter(col('evaluation_start_timestamp').isNull()).count()}"
+    )
+
+    print(
+        "Rows with NULL evaluation_submit_timestamp: "
+        f"{prepared_df.filter(col('evaluation_submit_timestamp').isNull()).count()}"
+    )
+
+    print(
+        "Rows with NULL evaluation_acknowledged_timestamp: "
+        f"{prepared_df.filter(col('evaluation_acknowledged_timestamp').isNull()).count()}"
+    )
+
+
+    # --------------------------------------------------------
     # Count rows removed because EvaluationId is missing
     # --------------------------------------------------------
     missing_evaluation_id_count = (
@@ -1091,7 +1171,9 @@ def main():
         "evaluation_id",
         "contact_id",
         "evaluation_definition_title",
+        "evaluation_start_timestamp",
         "evaluation_submit_timestamp",
+        "evaluation_acknowledged_timestamp",
         "evaluation_score_percentage",
         "source_file",
         "year",
@@ -1122,7 +1204,7 @@ def main():
 
 
     # --------------------------------------------------------
-    # Insert only EvaluationIds not already in the target table
+    # Insert only EvaluationIds not already in target
     # --------------------------------------------------------
     postactions = f"""
     BEGIN;
@@ -1211,11 +1293,11 @@ def main():
     # --------------------------------------------------------
     # Write current batch to Redshift staging
     #
-    # This retains the exact working Contact Lens write pattern:
-    # - staging and target table schemas match
-    # - complex columns are SUPER in both tables
-    # - TRUNCATECOLUMNS is not used
-    # - SERIALIZETOJSON is not used
+    # Same working Contact Lens write pattern:
+    # - matching target and staging schemas
+    # - SUPER columns in both tables
+    # - no TRUNCATECOLUMNS
+    # - no SERIALIZETOJSON
     # --------------------------------------------------------
     glue_context.write_dynamic_frame.from_options(
         frame=final_dyf,
