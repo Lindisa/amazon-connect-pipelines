@@ -18,6 +18,7 @@ from pyspark.sql.functions import (
     row_number,
     to_json,
     to_timestamp,
+    when,
 )
 from pyspark.sql.types import (
     ArrayType,
@@ -998,6 +999,29 @@ if row_count == 0:
 
 
 # ============================================================
+# Flatten the schema before creating a DynamicFrame
+#
+# Glue's JDBC DynamicFrame sink requires a flat schema. Convert only the
+# columns destined for Redshift SUPER from Spark arrays/structs/maps into
+# valid JSON strings. The scalar fields remain ordinary queryable columns.
+# ============================================================
+
+for column_name in super_target_columns:
+    flattened_df = flattened_df.withColumn(
+        column_name,
+        when(
+            col(column_name).isNull(),
+            lit("null"),
+        ).otherwise(
+            to_json(col(column_name))
+        ),
+    )
+
+print("Flat output schema sent to the Redshift sink:")
+flattened_df.printSchema()
+
+
+# ============================================================
 # Append-only Redshift load
 #
 # - Truncate staging before each run.
@@ -1070,7 +1094,7 @@ glue_context.write_dynamic_frame.from_jdbc_conf(
         "database": REDSHIFT_DATABASE,
         "preactions": preactions,
         "postactions": postactions,
-        "tempformat": "PARQUET",
+        "tempformat": "CSV GZIP",
     },
     redshift_tmp_dir=REDSHIFT_TMP_DIR,
     transformation_ctx="write_ctr_flattened_to_redshift",
