@@ -918,9 +918,21 @@ flattened_df = source_df.select(
         "Recordings",
     ).alias("recordings"),
 
-    native_complex_or_null(
-        source_df,
-        "References",
+    # References is stored as JSON text in the preprocessed Glue table.
+    # Parse it back into an array so it can load into the Redshift SUPER column.
+    from_json(
+        json_text_or_null(
+            source_df,
+            "References",
+        ),
+        ArrayType(
+            MapType(
+                StringType(),
+                StringType(),
+                valueContainsNull=True,
+            ),
+            containsNull=True,
+        ),
     ).alias("references_data"),
 
     col("_source_file").cast("string").alias("source_file"),
