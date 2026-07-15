@@ -1,0 +1,57 @@
+-- ============================================================
+-- MAIN TARGET TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.contact_evaluations (
+    schema_version                    VARCHAR(100),
+    evaluation_id                    VARCHAR(500) NOT NULL,
+
+    contact_id                       VARCHAR(256),
+    account_id                       VARCHAR(100),
+    instance_id                      VARCHAR(100),
+    agent_id                         VARCHAR(500),
+
+    evaluation_definition_title      VARCHAR(500),
+    evaluator                        VARCHAR(500),
+    evaluation_definition_id         VARCHAR(500),
+    evaluation_definition_version    INTEGER,
+
+    evaluation_start_timestamp       TIMESTAMPTZ,
+    evaluation_submit_timestamp      TIMESTAMPTZ,
+
+    evaluation_score_percentage      DOUBLE PRECISION,
+
+    creator                          VARCHAR(500),
+    auto_evaluated                   BOOLEAN,
+    resubmitted                      BOOLEAN,
+    evaluation_source                VARCHAR(256),
+    evaluation_type                  VARCHAR(256),
+
+    calibration_session_id           VARCHAR(500),
+    evaluated_participant_id         VARCHAR(256),
+    evaluated_participant_role       VARCHAR(100),
+
+    evaluation_acknowledger_comment  VARCHAR(65535),
+    evaluation_acknowledged_timestamp TIMESTAMPTZ,
+    evaluation_acknowledged_by_user_name VARCHAR(65535),
+    evaluation_acknowledged_by_user_id   VARCHAR(65535),
+
+    metadata                         SUPER,
+    sections                         SUPER,
+    questions                        SUPER,
+
+    source_file                      VARCHAR(65535),
+    processed_at                     TIMESTAMPTZ,
+
+    year                             VARCHAR(10),
+    month                            VARCHAR(10),
+    day                              VARCHAR(10)
+)
+DISTSTYLE AUTO
+SORTKEY (evaluation_submit_timestamp, evaluation_id);
+
+-- ============================================================
+-- STAGING TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.contact_evaluations_staging (
+    LIKE public.contact_evaluations
+);
