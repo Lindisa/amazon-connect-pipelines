@@ -12,13 +12,13 @@ from pyspark.sql.functions import (
     col,
     lit,
     when,
+    to_json,
+    get_json_object,
     current_timestamp,
     trim,
     row_number,
     sha2,
-    struct,
-    to_json,
-    get_json_object,
+    struct
 )
 from pyspark.sql.types import (
     StructType,
@@ -28,14 +28,14 @@ from pyspark.sql.types import (
     IntegerType,
     DoubleType,
     BooleanType,
-    TimestampType,
     NullType,
+    TimestampType
 )
 
 
-# ============================================================
-# Exact target/staging column order
-# ============================================================
+# ------------------------------------------------------------
+# Exact Redshift target and staging column order
+# ------------------------------------------------------------
 ALL_TARGET_COLUMNS = [
     "schema_version",
     "evaluation_id",
@@ -69,17 +69,26 @@ ALL_TARGET_COLUMNS = [
     "processed_at",
     "year",
     "month",
-    "day",
+    "day"
 ]
 
 
+# ------------------------------------------------------------
+# Columns stored as SUPER in Redshift
+#
+# The preprocess job converts these complex values into JSON
+# strings before writing Parquet.
+# ------------------------------------------------------------
 SUPER_TARGET_COLUMNS = [
     "metadata",
     "sections",
-    "questions",
+    "questions"
 ]
 
 
+# ------------------------------------------------------------
+# Columns stored as VARCHAR in Redshift
+# ------------------------------------------------------------
 STRING_TARGET_COLUMNS = [
     "schema_version",
     "evaluation_id",
@@ -102,13 +111,13 @@ STRING_TARGET_COLUMNS = [
     "source_file",
     "year",
     "month",
-    "day",
+    "day"
 ]
 
 
-# ============================================================
-# Optional Glue argument helper
-# ============================================================
+# ------------------------------------------------------------
+# Read an optional Glue job argument
+# ------------------------------------------------------------
 def get_optional_arg(arg_name, default_value):
     for index, argument in enumerate(sys.argv):
         if (
@@ -120,15 +129,15 @@ def get_optional_arg(arg_name, default_value):
     return default_value
 
 
-# ============================================================
-# Build Redshift temporary S3 directory
-# ============================================================
+# ------------------------------------------------------------
+# Build temporary S3 directory used by Redshift COPY
+# ------------------------------------------------------------
 def build_redshift_tmp_dir(bucket_value):
     value = (
         bucket_value
         .strip()
         .replace("s3://", "")
-        .strip("/")
+        .rstrip("/")
     )
 
     if "/" in value:
@@ -137,9 +146,15 @@ def build_redshift_tmp_dir(bucket_value):
     return f"s3://{value}/redshift_temp/"
 
 
-# ============================================================
-# Build Glue partition predicate
-# ============================================================
+# ------------------------------------------------------------
+# Build a predicate containing every date in the lookback range
+#
+# lookback_days = 1:
+#   yesterday and today
+#
+# lookback_days = 3:
+#   three days ago through today
+# ------------------------------------------------------------
 def build_partition_predicate(lookback_days):
     if lookback_days < 0:
         raise ValueError(
@@ -165,49 +180,17 @@ def build_partition_predicate(lookback_days):
     return "(" + " OR ".join(conditions) + ")"
 
 
-# ============================================================
-# Lowercase all top-level source columns
-# ============================================================
-def lowercase_source_columns(source_df):
-    spark_df = source_df
-
-    original_columns = list(spark_df.columns)
-
-    lowercase_columns = [
-        column_name.lower()
-        for column_name in original_columns
-    ]
-
-    if len(lowercase_columns) != len(
-        set(lowercase_columns)
-    ):
-        raise ValueError(
-            "Lowercasing source columns would create "
-            "duplicate column names."
-        )
-
-    for column_name in original_columns:
-        lowercase_name = column_name.lower()
-
-        if column_name != lowercase_name:
-            spark_df = spark_df.withColumnRenamed(
-                column_name,
-                lowercase_name,
-            )
-
-    return spark_df
-
-
-# ============================================================
-# Read a field from metadata whether it is a Struct or JSON
-# string
-# ============================================================
-def metadata_value(
-    spark_df,
+# ------------------------------------------------------------
+# Get a field from metadata.
+#
+# The preprocess job normally stores metadata as a JSON string,
+# but StructType is also supported as a defensive fallback.
+# ------------------------------------------------------------
+def get_metadata_value(
     metadata_type,
     struct_field_name,
-    json_field_name,
-    target_type,
+    json_path,
+    target_type
 ):
     if isinstance(metadata_type, StructType):
         available_fields = {
@@ -225,48 +208,118 @@ def metadata_value(
     if isinstance(metadata_type, StringType):
         return get_json_object(
             col("metadata"),
-            f"$.{json_field_name}",
+            json_path
         ).cast(target_type)
 
     return lit(None).cast(target_type)
 
 
-# ============================================================
-# Transform Contact Evaluation source
-# ============================================================
+# ------------------------------------------------------------
+# Extract metadata.score.percentage.
+# ------------------------------------------------------------
+def get_score_percentage(metadata_type):
+    if isinstance(metadata_type, StringType):
+        return get_json_object(
+            col("metadata"),
+            "$.score.percentage"
+        ).cast(DoubleType())
+
+    if isinstance(metadata_type, StructType):
+        metadata_fields = {
+            field.name: field.dataType
+            for field in metadata_type.fields
+        }
+
+        if "score" not in metadata_fields:
+            return lit(None).cast(DoubleType())
+
+        score_type = metadata_fields["score"]
+
+        if not isinstance(score_type, StructType):
+            return lit(None).cast(DoubleType())
+
+        score_fields = {
+            field.name
+            for field in score_type.fields
+        }
+
+        if "percentage" not in score_fields:
+            return lit(None).cast(DoubleType())
+
+        return col(
+            "metadata.score.percentage"
+        ).cast(DoubleType())
+
+    return lit(None).cast(DoubleType())
+
+
+# ------------------------------------------------------------
+# Normalise and transform Contact Evaluation source data
+# ------------------------------------------------------------
 def transform_source_dataframe(source_df):
-    spark_df = lowercase_source_columns(
-        source_df
-    )
+    spark_df = source_df
+
 
     # --------------------------------------------------------
-    # Top-level exported field names become lowercase after
-    # normalisation.
+    # 1. Convert top-level source column names to lowercase
+    # --------------------------------------------------------
+    original_columns = list(spark_df.columns)
+
+    lowercase_columns = [
+        column_name.lower()
+        for column_name in original_columns
+    ]
+
+    if len(lowercase_columns) != len(set(lowercase_columns)):
+        raise ValueError(
+            "Lowercasing the source column names would create "
+            "duplicate column names."
+        )
+
+    for column_name in original_columns:
+        lowercase_name = column_name.lower()
+
+        if column_name != lowercase_name:
+            spark_df = spark_df.withColumnRenamed(
+                column_name,
+                lowercase_name
+            )
+
+
+    # --------------------------------------------------------
+    # 2. Rename the top-level Contact Evaluation fields
     # --------------------------------------------------------
     if "schemaversion" in spark_df.columns:
         spark_df = spark_df.withColumnRenamed(
             "schemaversion",
-            "schema_version",
+            "schema_version"
         )
-    else:
+
+    elif "schema_version" not in spark_df.columns:
         spark_df = spark_df.withColumn(
             "schema_version",
-            lit(None).cast(StringType()),
+            lit(None).cast(StringType())
         )
+
 
     if "evaluationid" in spark_df.columns:
         spark_df = spark_df.withColumnRenamed(
             "evaluationid",
-            "evaluation_id",
-        )
-    else:
-        spark_df = spark_df.withColumn(
-            "evaluation_id",
-            lit(None).cast(StringType()),
+            "evaluation_id"
         )
 
+    elif "evaluation_id" not in spark_df.columns:
+        spark_df = spark_df.withColumn(
+            "evaluation_id",
+            lit(None).cast(StringType())
+        )
+
+
     # --------------------------------------------------------
-    # Extract metadata fields
+    # 3. Extract Contact Evaluation metadata fields
+    #
+    # Metadata should normally be a JSON string after the
+    # preprocess job, but StructType is also supported.
     # --------------------------------------------------------
     if "metadata" in spark_df.columns:
         metadata_type = (
@@ -277,215 +330,166 @@ def transform_source_dataframe(source_df):
             (
                 "contact_id",
                 "contactId",
-                "contactId",
-                StringType(),
+                "$.contactId",
+                StringType()
             ),
             (
                 "account_id",
                 "accountId",
-                "accountId",
-                StringType(),
+                "$.accountId",
+                StringType()
             ),
             (
                 "instance_id",
                 "instanceId",
-                "instanceId",
-                StringType(),
+                "$.instanceId",
+                StringType()
             ),
             (
                 "agent_id",
                 "agentId",
-                "agentId",
-                StringType(),
+                "$.agentId",
+                StringType()
             ),
             (
                 "evaluation_definition_title",
                 "evaluationDefinitionTitle",
-                "evaluationDefinitionTitle",
-                StringType(),
+                "$.evaluationDefinitionTitle",
+                StringType()
             ),
             (
                 "evaluator",
                 "evaluator",
-                "evaluator",
-                StringType(),
+                "$.evaluator",
+                StringType()
             ),
             (
                 "evaluation_definition_id",
                 "evaluationDefinitionId",
-                "evaluationDefinitionId",
-                StringType(),
+                "$.evaluationDefinitionId",
+                StringType()
             ),
             (
                 "evaluation_definition_version",
                 "evaluationDefinitionVersion",
-                "evaluationDefinitionVersion",
-                IntegerType(),
+                "$.evaluationDefinitionVersion",
+                IntegerType()
             ),
             (
                 "evaluation_start_timestamp",
                 "evaluationStartTimestamp",
-                "evaluationStartTimestamp",
-                TimestampType(),
+                "$.evaluationStartTimestamp",
+                TimestampType()
             ),
             (
                 "evaluation_submit_timestamp",
                 "evaluationSubmitTimestamp",
-                "evaluationSubmitTimestamp",
-                TimestampType(),
+                "$.evaluationSubmitTimestamp",
+                TimestampType()
             ),
             (
                 "creator",
                 "creator",
-                "creator",
-                StringType(),
+                "$.creator",
+                StringType()
             ),
             (
                 "auto_evaluated",
                 "autoEvaluated",
-                "autoEvaluated",
-                BooleanType(),
+                "$.autoEvaluated",
+                BooleanType()
             ),
             (
                 "resubmitted",
                 "resubmitted",
-                "resubmitted",
-                BooleanType(),
+                "$.resubmitted",
+                BooleanType()
             ),
             (
                 "evaluation_source",
                 "evaluationSource",
-                "evaluationSource",
-                StringType(),
+                "$.evaluationSource",
+                StringType()
             ),
             (
                 "evaluation_type",
                 "evaluationType",
-                "evaluationType",
-                StringType(),
+                "$.evaluationType",
+                StringType()
             ),
             (
                 "calibration_session_id",
                 "calibrationSessionId",
-                "calibrationSessionId",
-                StringType(),
+                "$.calibrationSessionId",
+                StringType()
             ),
             (
                 "evaluated_participant_id",
                 "evaluatedParticipantId",
-                "evaluatedParticipantId",
-                StringType(),
+                "$.evaluatedParticipantId",
+                StringType()
             ),
             (
                 "evaluated_participant_role",
                 "evaluatedParticipantRole",
-                "evaluatedParticipantRole",
-                StringType(),
+                "$.evaluatedParticipantRole",
+                StringType()
             ),
             (
                 "evaluation_acknowledger_comment",
                 "evaluationAcknowledgerComment",
-                "evaluationAcknowledgerComment",
-                StringType(),
+                "$.evaluationAcknowledgerComment",
+                StringType()
             ),
             (
                 "evaluation_acknowledged_timestamp",
                 "evaluationAcknowledgedTimestamp",
-                "evaluationAcknowledgedTimestamp",
-                TimestampType(),
+                "$.evaluationAcknowledgedTimestamp",
+                TimestampType()
             ),
             (
                 "evaluation_acknowledged_by_user_name",
                 "evaluationAcknowledgedByUserName",
-                "evaluationAcknowledgedByUserName",
-                StringType(),
+                "$.evaluationAcknowledgedByUserName",
+                StringType()
             ),
             (
                 "evaluation_acknowledged_by_user_id",
                 "evaluationAcknowledgedByUserId",
-                "evaluationAcknowledgedByUserId",
-                StringType(),
-            ),
+                "$.evaluationAcknowledgedByUserId",
+                StringType()
+            )
         ]
 
         for (
-            target_name,
+            target_column,
             struct_field_name,
-            json_field_name,
-            target_type,
+            json_path,
+            target_type
         ) in metadata_fields:
             spark_df = spark_df.withColumn(
-                target_name,
-                metadata_value(
-                    spark_df,
+                target_column,
+                get_metadata_value(
                     metadata_type,
                     struct_field_name,
-                    json_field_name,
-                    target_type,
-                ),
-            )
-
-        # ----------------------------------------------------
-        # Extract metadata.score.percentage
-        # ----------------------------------------------------
-        if isinstance(metadata_type, StructType):
-            metadata_field_names = {
-                field.name
-                for field in metadata_type.fields
-            }
-
-            if "score" in metadata_field_names:
-                score_type = next(
-                    field.dataType
-                    for field in metadata_type.fields
-                    if field.name == "score"
+                    json_path,
+                    target_type
                 )
-
-                if isinstance(score_type, StructType):
-                    score_field_names = {
-                        field.name
-                        for field in score_type.fields
-                    }
-
-                    if "percentage" in score_field_names:
-                        score_expression = col(
-                            "metadata.score.percentage"
-                        ).cast(DoubleType())
-                    else:
-                        score_expression = lit(
-                            None
-                        ).cast(DoubleType())
-                else:
-                    score_expression = lit(
-                        None
-                    ).cast(DoubleType())
-            else:
-                score_expression = lit(
-                    None
-                ).cast(DoubleType())
-
-        elif isinstance(metadata_type, StringType):
-            score_expression = get_json_object(
-                col("metadata"),
-                "$.score.percentage",
-            ).cast(DoubleType())
-
-        else:
-            score_expression = lit(
-                None
-            ).cast(DoubleType())
+            )
 
         spark_df = spark_df.withColumn(
             "evaluation_score_percentage",
-            score_expression,
+            get_score_percentage(
+                metadata_type
+            )
         )
 
     else:
         print(
-            "WARNING: metadata column is missing."
+            "WARNING: metadata is missing from the source."
         )
 
-        missing_metadata_columns = [
+        missing_string_columns = [
             "contact_id",
             "account_id",
             "instance_id",
@@ -501,68 +505,78 @@ def transform_source_dataframe(source_df):
             "evaluated_participant_role",
             "evaluation_acknowledger_comment",
             "evaluation_acknowledged_by_user_name",
-            "evaluation_acknowledged_by_user_id",
+            "evaluation_acknowledged_by_user_id"
         ]
 
-        for column_name in missing_metadata_columns:
+        for column_name in missing_string_columns:
             spark_df = spark_df.withColumn(
                 column_name,
-                lit(None).cast(StringType()),
+                lit(None).cast(StringType())
             )
 
         spark_df = spark_df.withColumn(
             "evaluation_definition_version",
-            lit(None).cast(IntegerType()),
+            lit(None).cast(IntegerType())
         )
 
         spark_df = spark_df.withColumn(
             "evaluation_start_timestamp",
-            lit(None).cast(TimestampType()),
+            lit(None).cast(TimestampType())
         )
 
         spark_df = spark_df.withColumn(
             "evaluation_submit_timestamp",
-            lit(None).cast(TimestampType()),
-        )
-
-        spark_df = spark_df.withColumn(
-            "evaluation_acknowledged_timestamp",
-            lit(None).cast(TimestampType()),
+            lit(None).cast(TimestampType())
         )
 
         spark_df = spark_df.withColumn(
             "evaluation_score_percentage",
-            lit(None).cast(DoubleType()),
+            lit(None).cast(DoubleType())
         )
 
         spark_df = spark_df.withColumn(
             "auto_evaluated",
-            lit(None).cast(BooleanType()),
+            lit(None).cast(BooleanType())
         )
 
         spark_df = spark_df.withColumn(
             "resubmitted",
-            lit(None).cast(BooleanType()),
+            lit(None).cast(BooleanType())
         )
 
+        spark_df = spark_df.withColumn(
+            "evaluation_acknowledged_timestamp",
+            lit(None).cast(TimestampType())
+        )
+
+
     # --------------------------------------------------------
-    # Preserve the preprocess source_file column.
-    # If it is missing, add it as NULL.
+    # 4. Preserve source_file from the preprocess job
     # --------------------------------------------------------
     if "source_file" not in spark_df.columns:
         spark_df = spark_df.withColumn(
             "source_file",
-            lit(None).cast(StringType()),
+            lit(None).cast(StringType())
         )
 
-    spark_df = spark_df.withColumn(
-        "processed_at",
-        current_timestamp(),
-    )
 
     # --------------------------------------------------------
-    # Convert SUPER fields to valid JSON strings before
-    # Redshift COPY.
+    # 5. Add the ETL processing timestamp
+    # --------------------------------------------------------
+    spark_df = spark_df.withColumn(
+        "processed_at",
+        current_timestamp()
+    )
+
+
+    # --------------------------------------------------------
+    # 6. Ensure complex fields are JSON strings
+    #
+    # The preprocess job normally already performs this.
+    # Structs, arrays and maps are handled again only as a
+    # defensive fallback.
+    #
+    # Missing values remain genuine SQL NULL.
     # --------------------------------------------------------
     schema_types = {
         field.name: field.dataType
@@ -571,11 +585,6 @@ def transform_source_dataframe(source_df):
 
     for column_name in SUPER_TARGET_COLUMNS:
         if column_name not in spark_df.columns:
-            spark_df = spark_df.withColumn(
-                column_name,
-                lit(None).cast(StringType()),
-            )
-
             continue
 
         column_type = schema_types[column_name]
@@ -583,21 +592,21 @@ def transform_source_dataframe(source_df):
         if isinstance(column_type, NullType):
             spark_df = spark_df.withColumn(
                 column_name,
-                lit(None).cast(StringType()),
+                lit(None).cast(StringType())
             )
 
         elif isinstance(
             column_type,
-            (StructType, ArrayType, MapType),
+            (StructType, ArrayType, MapType)
         ):
             spark_df = spark_df.withColumn(
                 column_name,
                 when(
                     col(column_name).isNull(),
-                    lit(None).cast(StringType()),
+                    lit(None).cast(StringType())
                 ).otherwise(
                     to_json(col(column_name))
-                ),
+                )
             )
 
         elif isinstance(column_type, StringType):
@@ -606,134 +615,173 @@ def transform_source_dataframe(source_df):
                 when(
                     col(column_name).isNull()
                     | (trim(col(column_name)) == ""),
-                    lit(None).cast(StringType()),
+                    lit(None).cast(StringType())
                 ).otherwise(
-                    col(column_name)
-                ),
+                    col(column_name).cast(StringType())
+                )
             )
 
         else:
+            print(
+                f"WARNING: {column_name} has unsupported type "
+                f"{column_type}. Its value will be stored as NULL."
+            )
+
             spark_df = spark_df.withColumn(
                 column_name,
-                lit(None).cast(StringType()),
+                lit(None).cast(StringType())
             )
 
     return spark_df
 
 
-# ============================================================
-# Align exact target schema
-# ============================================================
+# ------------------------------------------------------------
+# Add missing columns and enforce required Spark data types
+# ------------------------------------------------------------
 def align_target_schema(spark_df):
-    existing_columns = set(
-        spark_df.columns
-    )
+    existing_columns = set(spark_df.columns)
 
+
+    # --------------------------------------------------------
+    # 7. Add target columns missing from the source
+    # --------------------------------------------------------
     for column_name in ALL_TARGET_COLUMNS:
         if column_name in existing_columns:
             continue
 
-        if column_name in STRING_TARGET_COLUMNS:
-            target_type = StringType()
-
-        elif column_name in SUPER_TARGET_COLUMNS:
-            target_type = StringType()
+        if column_name == "processed_at":
+            spark_df = spark_df.withColumn(
+                column_name,
+                current_timestamp()
+            )
 
         elif column_name == "evaluation_definition_version":
-            target_type = IntegerType()
+            spark_df = spark_df.withColumn(
+                column_name,
+                lit(None).cast(IntegerType())
+            )
 
         elif column_name == "evaluation_score_percentage":
-            target_type = DoubleType()
+            spark_df = spark_df.withColumn(
+                column_name,
+                lit(None).cast(DoubleType())
+            )
 
         elif column_name in [
             "auto_evaluated",
-            "resubmitted",
+            "resubmitted"
         ]:
-            target_type = BooleanType()
+            spark_df = spark_df.withColumn(
+                column_name,
+                lit(None).cast(BooleanType())
+            )
 
         elif column_name in [
             "evaluation_start_timestamp",
             "evaluation_submit_timestamp",
-            "evaluation_acknowledged_timestamp",
-            "processed_at",
+            "evaluation_acknowledged_timestamp"
         ]:
-            target_type = TimestampType()
+            spark_df = spark_df.withColumn(
+                column_name,
+                lit(None).cast(TimestampType())
+            )
 
         else:
-            target_type = StringType()
+            spark_df = spark_df.withColumn(
+                column_name,
+                lit(None).cast(StringType())
+            )
 
-        spark_df = spark_df.withColumn(
-            column_name,
-            lit(None).cast(target_type),
-        )
 
-    for column_name in STRING_TARGET_COLUMNS:
-        spark_df = spark_df.withColumn(
-            column_name,
-            col(column_name).cast(StringType()),
-        )
-
+    # --------------------------------------------------------
+    # 8. Ensure SUPER input columns are JSON strings
+    # --------------------------------------------------------
     for column_name in SUPER_TARGET_COLUMNS:
         spark_df = spark_df.withColumn(
             column_name,
-            col(column_name).cast(StringType()),
+            col(column_name).cast(StringType())
         )
 
+
+    # --------------------------------------------------------
+    # 9. Ensure Redshift VARCHAR fields are Spark strings
+    # --------------------------------------------------------
+    for column_name in STRING_TARGET_COLUMNS:
+        spark_df = spark_df.withColumn(
+            column_name,
+            col(column_name).cast(StringType())
+        )
+
+
+    # --------------------------------------------------------
+    # 10. Ensure numeric and Boolean fields use exact types
+    # --------------------------------------------------------
     spark_df = spark_df.withColumn(
         "evaluation_definition_version",
         col(
             "evaluation_definition_version"
-        ).cast(IntegerType()),
+        ).cast(IntegerType())
     )
 
     spark_df = spark_df.withColumn(
         "evaluation_score_percentage",
         col(
             "evaluation_score_percentage"
-        ).cast(DoubleType()),
+        ).cast(DoubleType())
     )
 
     spark_df = spark_df.withColumn(
         "auto_evaluated",
-        col("auto_evaluated").cast(BooleanType()),
+        col("auto_evaluated").cast(BooleanType())
     )
 
     spark_df = spark_df.withColumn(
         "resubmitted",
-        col("resubmitted").cast(BooleanType()),
+        col("resubmitted").cast(BooleanType())
     )
 
+
+    # --------------------------------------------------------
+    # 11. Ensure timestamp fields use exact timestamp types
+    # --------------------------------------------------------
     timestamp_columns = [
         "evaluation_start_timestamp",
         "evaluation_submit_timestamp",
         "evaluation_acknowledged_timestamp",
-        "processed_at",
+        "processed_at"
     ]
 
     for column_name in timestamp_columns:
         spark_df = spark_df.withColumn(
             column_name,
-            col(column_name).cast(TimestampType()),
+            col(column_name).cast(TimestampType())
         )
 
+
+    # --------------------------------------------------------
+    # 12. Clean EvaluationId once
+    #
+    # NULL, empty and whitespace-only values become SQL NULL.
+    # --------------------------------------------------------
     spark_df = spark_df.withColumn(
         "evaluation_id",
         when(
             col("evaluation_id").isNull()
             | (trim(col("evaluation_id")) == ""),
-            lit(None).cast(StringType()),
+            lit(None).cast(StringType())
         ).otherwise(
             trim(col("evaluation_id"))
-        ),
+        )
     )
 
     return spark_df
 
 
-# ============================================================
-# Keep the newest row per evaluation_id
-# ============================================================
-def remove_duplicate_evaluations(valid_df):
+# ------------------------------------------------------------
+# Deterministically keep one row per EvaluationId in this run
+# ------------------------------------------------------------
+def remove_duplicate_evaluation_ids(valid_df):
+    # A stable row hash is used as the final tie-breaker.
     valid_df = valid_df.withColumn(
         "__row_hash",
         sha2(
@@ -745,10 +793,22 @@ def remove_duplicate_evaluations(valid_df):
                     ]
                 )
             ),
-            256,
-        ),
+            256
+        )
     )
 
+
+    # --------------------------------------------------------
+    # Duplicate preference:
+    #
+    # 1. Latest evaluation submit timestamp
+    # 2. Latest evaluation start timestamp
+    # 3. Latest year
+    # 4. Latest month
+    # 5. Latest day
+    # 6. Highest source_file
+    # 7. Stable row hash
+    # --------------------------------------------------------
     duplicate_window = (
         Window
         .partitionBy("evaluation_id")
@@ -763,7 +823,7 @@ def remove_duplicate_evaluations(valid_df):
             col("month").desc_nulls_last(),
             col("day").desc_nulls_last(),
             col("source_file").desc_nulls_last(),
-            col("__row_hash").desc_nulls_last(),
+            col("__row_hash").desc_nulls_last()
         )
     )
 
@@ -771,24 +831,28 @@ def remove_duplicate_evaluations(valid_df):
         valid_df
         .withColumn(
             "__duplicate_row_number",
-            row_number().over(
-                duplicate_window
-            ),
+            row_number().over(duplicate_window)
         )
         .filter(
             col("__duplicate_row_number") == 1
         )
         .drop(
             "__duplicate_row_number",
-            "__row_hash",
+            "__row_hash"
         )
     )
 
 
-# ============================================================
+# ------------------------------------------------------------
 # Main Glue job
-# ============================================================
+#
+# Using return rather than sys.exit prevents successful no-data
+# runs from being reported by Glue as SYSTEM_EXIT_ERROR.
+# ------------------------------------------------------------
 def main():
+    # --------------------------------------------------------
+    # Read required job parameters
+    # --------------------------------------------------------
     args = getResolvedOptions(
         sys.argv,
         [
@@ -798,10 +862,14 @@ def main():
             "target_table",
             "target_connection_name",
             "job_store_bucket_name",
-            "redshift_s3_role_arn",
-        ],
+            "redshift_s3_role_arn"
+        ]
     )
 
+
+    # --------------------------------------------------------
+    # Initialise Glue and Spark
+    # --------------------------------------------------------
     spark_context = SparkContext()
 
     glue_context = GlueContext(
@@ -812,12 +880,14 @@ def main():
 
     job.init(
         args["JOB_NAME"],
-        args,
+        args
     )
 
-    target_table = args[
-        "target_table"
-    ]
+
+    # --------------------------------------------------------
+    # Job configuration
+    # --------------------------------------------------------
+    target_table = args["target_table"]
 
     staging_table = (
         "public.contact_evaluations_staging"
@@ -831,7 +901,7 @@ def main():
         lookback_days = int(
             get_optional_arg(
                 "lookback_days",
-                "1",
+                "1"
             )
         )
     except ValueError as error:
@@ -842,48 +912,27 @@ def main():
     initial_load = (
         get_optional_arg(
             "initial_load",
-            "false",
-        )
-        .strip()
-        .lower()
+            "false"
+        ).strip().lower()
         == "true"
     )
 
-    print(
-        "===== CONTACT EVALUATIONS REDSHIFT ETL STARTED ====="
-    )
-
-    print(
-        f"Target table: {target_table}"
-    )
-
-    print(
-        f"Staging table: {staging_table}"
-    )
-
-    print(
-        f"Redshift temporary directory: {redshift_tmp_dir}"
-    )
 
     # --------------------------------------------------------
-    # Read Glue Catalog source
+    # Read Contact Evaluations data from the Glue Catalog
     # --------------------------------------------------------
     if initial_load:
         print(
-            "Performing full Contact Evaluations load."
+            "Performing full Contact Evaluations Redshift load."
         )
 
         source_dyf = (
             glue_context
             .create_dynamic_frame
             .from_catalog(
-                database=args[
-                    "source_database"
-                ],
-                table_name=args[
-                    "source_table"
-                ],
-                transformation_ctx="source_dyf",
+                database=args["source_database"],
+                table_name=args["source_table"],
+                transformation_ctx="source_dyf"
             )
         )
 
@@ -893,7 +942,8 @@ def main():
         )
 
         print(
-            "Performing incremental Contact Evaluations load."
+            "Performing incremental Contact Evaluations "
+            "Redshift load."
         )
 
         print(
@@ -904,54 +954,61 @@ def main():
             glue_context
             .create_dynamic_frame
             .from_catalog(
-                database=args[
-                    "source_database"
-                ],
-                table_name=args[
-                    "source_table"
-                ],
+                database=args["source_database"],
+                table_name=args["source_table"],
                 push_down_predicate=predicate,
-                transformation_ctx="source_dyf",
+                transformation_ctx="source_dyf"
             )
         )
 
+
+    # --------------------------------------------------------
+    # Convert source DynamicFrame to Spark DataFrame
+    # --------------------------------------------------------
     source_df = source_dyf.toDF()
 
-    source_record_count = (
-        source_df.count()
-    )
+    source_record_count = source_df.count()
 
     print(
-        "Source Contact Evaluation records read: "
-        f"{source_record_count}"
+        "Source Contact Evaluation records read from "
+        f"Glue Catalog: {source_record_count}"
     )
 
+
+    # --------------------------------------------------------
+    # Successful no-source-record completion
+    # --------------------------------------------------------
     if source_record_count == 0:
         print(
-            "No Contact Evaluation records found."
+            "No source records were found for the selected "
+            "partitions. Redshift will not be updated."
         )
 
         job.commit()
 
         print(
-            "===== CONTACT EVALUATIONS REDSHIFT ETL COMPLETED ====="
+            "Contact Evaluations Redshift ETL completed "
+            "successfully with no source records."
         )
 
         return
 
-    transformed_df = (
-        transform_source_dataframe(
-            source_df
-        )
+
+    # --------------------------------------------------------
+    # Transform and align source data
+    # --------------------------------------------------------
+    transformed_df = transform_source_dataframe(
+        source_df
     )
 
-    prepared_df = (
-        align_target_schema(
-            transformed_df
-        )
-        .cache()
-    )
+    prepared_df = align_target_schema(
+        transformed_df
+    ).cache()
 
+
+    # --------------------------------------------------------
+    # Count rows removed because EvaluationId is missing
+    # --------------------------------------------------------
     missing_evaluation_id_count = (
         prepared_df
         .filter(
@@ -961,18 +1018,30 @@ def main():
     )
 
     print(
-        "Records removed because evaluation_id was "
-        f"missing or blank: {missing_evaluation_id_count}"
+        "Records removed because evaluation_id was missing "
+        f"or blank: {missing_evaluation_id_count}"
     )
 
+
+    # --------------------------------------------------------
+    # Keep only records with a valid EvaluationId
+    # --------------------------------------------------------
     valid_df = prepared_df.filter(
         col("evaluation_id").isNotNull()
     )
 
-    valid_df = remove_duplicate_evaluations(
+
+    # --------------------------------------------------------
+    # Remove duplicate EvaluationIds within this job run
+    # --------------------------------------------------------
+    valid_df = remove_duplicate_evaluation_ids(
         valid_df
     )
 
+
+    # --------------------------------------------------------
+    # Enforce exact target column order and cache final data
+    # --------------------------------------------------------
     valid_df = (
         valid_df
         .select(
@@ -981,30 +1050,42 @@ def main():
         .cache()
     )
 
-    valid_record_count = (
-        valid_df.count()
-    )
+    valid_record_count = valid_df.count()
 
     print(
-        "Valid deduplicated evaluations to load: "
+        "Valid deduplicated evaluations to load into staging: "
         f"{valid_record_count}"
     )
 
+
+    # --------------------------------------------------------
+    # Successful no-valid-record completion
+    # --------------------------------------------------------
     if valid_record_count == 0:
+        print(
+            "No valid records remain after EvaluationId "
+            "validation. Redshift will not be updated."
+        )
+
         valid_df.unpersist()
         prepared_df.unpersist()
 
         job.commit()
 
         print(
-            "No valid evaluation records remain."
-        )
-
-        print(
-            "===== CONTACT EVALUATIONS REDSHIFT ETL COMPLETED ====="
+            "Contact Evaluations Redshift ETL completed "
+            "successfully with no valid records."
         )
 
         return
+
+
+    # --------------------------------------------------------
+    # Show sample data in Glue logs
+    # --------------------------------------------------------
+    print(
+        "Sample before Redshift staging write:"
+    )
 
     valid_df.select(
         "evaluation_id",
@@ -1015,35 +1096,36 @@ def main():
         "source_file",
         "year",
         "month",
-        "day",
+        "day"
     ).show(
         10,
-        truncate=False,
+        truncate=False
     )
 
+
+    # --------------------------------------------------------
+    # Convert final DataFrame back to DynamicFrame
+    # --------------------------------------------------------
     final_dyf = DynamicFrame.fromDF(
         valid_df,
         glue_context,
-        "final_contact_evaluations_frame",
+        "final_redshift_frame"
     )
 
+
+    # --------------------------------------------------------
+    # Clear only the staging table before the batch load
+    # --------------------------------------------------------
     preactions = f"""
     TRUNCATE TABLE {staging_table};
     """
 
+
     # --------------------------------------------------------
-    # Upsert logic:
-    #
-    # Delete an older copy of an evaluation, then insert the
-    # newest version from staging.
+    # Insert only EvaluationIds not already in the target table
     # --------------------------------------------------------
     postactions = f"""
     BEGIN;
-
-    DELETE FROM {target_table}
-    USING {staging_table}
-    WHERE {target_table}.evaluation_id =
-          {staging_table}.evaluation_id;
 
     INSERT INTO {target_table} (
         schema_version,
@@ -1081,45 +1163,60 @@ def main():
         day
     )
     SELECT
-        schema_version,
-        evaluation_id,
-        contact_id,
-        account_id,
-        instance_id,
-        agent_id,
-        evaluation_definition_title,
-        evaluator,
-        evaluation_definition_id,
-        evaluation_definition_version,
-        evaluation_start_timestamp,
-        evaluation_submit_timestamp,
-        evaluation_score_percentage,
-        creator,
-        auto_evaluated,
-        resubmitted,
-        evaluation_source,
-        evaluation_type,
-        calibration_session_id,
-        evaluated_participant_id,
-        evaluated_participant_role,
-        evaluation_acknowledger_comment,
-        evaluation_acknowledged_timestamp,
-        evaluation_acknowledged_by_user_name,
-        evaluation_acknowledged_by_user_id,
-        metadata,
-        sections,
-        questions,
-        source_file,
-        processed_at,
-        year,
-        month,
-        day
-    FROM {staging_table}
-    WHERE evaluation_id IS NOT NULL;
+        s.schema_version,
+        s.evaluation_id,
+        s.contact_id,
+        s.account_id,
+        s.instance_id,
+        s.agent_id,
+        s.evaluation_definition_title,
+        s.evaluator,
+        s.evaluation_definition_id,
+        s.evaluation_definition_version,
+        s.evaluation_start_timestamp,
+        s.evaluation_submit_timestamp,
+        s.evaluation_score_percentage,
+        s.creator,
+        s.auto_evaluated,
+        s.resubmitted,
+        s.evaluation_source,
+        s.evaluation_type,
+        s.calibration_session_id,
+        s.evaluated_participant_id,
+        s.evaluated_participant_role,
+        s.evaluation_acknowledger_comment,
+        s.evaluation_acknowledged_timestamp,
+        s.evaluation_acknowledged_by_user_name,
+        s.evaluation_acknowledged_by_user_id,
+        s.metadata,
+        s.sections,
+        s.questions,
+        s.source_file,
+        s.processed_at,
+        s.year,
+        s.month,
+        s.day
+    FROM {staging_table} AS s
+    WHERE s.evaluation_id IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1
+          FROM {target_table} AS t
+          WHERE t.evaluation_id = s.evaluation_id
+      );
 
     COMMIT;
     """
 
+
+    # --------------------------------------------------------
+    # Write current batch to Redshift staging
+    #
+    # This retains the exact working Contact Lens write pattern:
+    # - staging and target table schemas match
+    # - complex columns are SUPER in both tables
+    # - TRUNCATECOLUMNS is not used
+    # - SERIALIZETOJSON is not used
+    # --------------------------------------------------------
     glue_context.write_dynamic_frame.from_options(
         frame=final_dyf,
         connection_type="redshift",
@@ -1135,31 +1232,32 @@ def main():
             "dbtable": staging_table,
             "preactions": preactions,
             "postactions": postactions,
-            "extracopyoptions": (
-                "ACCEPTINVCHARS "
-                "TRUNCATECOLUMNS "
-                "SERIALIZETOJSON"
-            ),
+            "extracopyoptions": "ACCEPTINVCHARS"
         },
-        transformation_ctx=(
-            "AmazonRedshiftContactEvaluationsTarget"
-        ),
+        transformation_ctx="AmazonRedshiftTarget"
     )
 
+
+    # --------------------------------------------------------
+    # Release cached Spark data
+    # --------------------------------------------------------
     valid_df.unpersist()
     prepared_df.unpersist()
 
+
+    # --------------------------------------------------------
+    # Complete Glue job
+    # --------------------------------------------------------
     job.commit()
 
     print(
-        "Contact Evaluations Redshift ETL "
-        "completed successfully."
-    )
-
-    print(
-        "===== CONTACT EVALUATIONS REDSHIFT ETL COMPLETED ====="
+        "Contact Evaluations Redshift ETL completed "
+        "successfully."
     )
 
 
+# ------------------------------------------------------------
+# Run the Glue job
+# ------------------------------------------------------------
 if __name__ == "__main__":
     main()
