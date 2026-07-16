@@ -43,7 +43,6 @@ args = getResolvedOptions(
         "source_table",
         "redshift_connection_name",
         "redshift_tmp_dir",
-        "redshift_database",
         "redshift_schema",
         "target_table",
     ],
@@ -53,13 +52,19 @@ SOURCE_DATABASE = args["source_database"]
 SOURCE_TABLE = args["source_table"]
 REDSHIFT_CONNECTION_NAME = args["redshift_connection_name"]
 REDSHIFT_TMP_DIR = args["redshift_tmp_dir"].rstrip("/") + "/"
-REDSHIFT_DATABASE = args["redshift_database"]
+REDSHIFT_DATABASE = "amazonconnectdatawarehouse"
 REDSHIFT_SCHEMA = args["redshift_schema"]
 TARGET_TABLE = args["target_table"]
 
 STAGING_TABLE = f"{TARGET_TABLE}_staging"
 QUALIFIED_TARGET = f"{REDSHIFT_SCHEMA}.{TARGET_TABLE}"
 QUALIFIED_STAGING = f"{REDSHIFT_SCHEMA}.{STAGING_TABLE}"
+
+if not REDSHIFT_TMP_DIR.startswith(("s3://", "s3a://", "s3n://")):
+    raise ValueError(
+        "--redshift_tmp_dir must be a complete S3 URI, for example "
+        "s3://bucket-name/redshift-temp/ctr-flattened/"
+    )
 
 
 # ============================================================
@@ -1086,6 +1091,11 @@ output_dynamic_frame = DynamicFrame.fromDF(
     "flattened_ctr_output",
 )
 
+print(f"Redshift database: {REDSHIFT_DATABASE}")
+print(f"Redshift staging table: {QUALIFIED_STAGING}")
+print(f"Redshift target table: {QUALIFIED_TARGET}")
+print(f"Redshift temporary directory: {REDSHIFT_TMP_DIR}")
+
 glue_context.write_dynamic_frame.from_jdbc_conf(
     frame=output_dynamic_frame,
     catalog_connection=REDSHIFT_CONNECTION_NAME,
@@ -1095,6 +1105,7 @@ glue_context.write_dynamic_frame.from_jdbc_conf(
         "preactions": preactions,
         "postactions": postactions,
         "tempformat": "CSV GZIP",
+        "extracopyoptions": "TIMEFORMAT 'auto'",
     },
     redshift_tmp_dir=REDSHIFT_TMP_DIR,
     transformation_ctx="write_ctr_flattened_to_redshift",
