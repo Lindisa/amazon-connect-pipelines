@@ -82,6 +82,13 @@ STAGING_ONLY = (
     ).strip().lower() == "true"
 )
 
+LATEST_ONLY = (
+    get_optional_job_arg(
+        "latest_only",
+        "true",
+    ).strip().lower() == "true"
+)
+
 STAGING_TABLE = f"{TARGET_TABLE}_staging"
 QUALIFIED_TARGET = f"{REDSHIFT_SCHEMA}.{TARGET_TABLE}"
 QUALIFIED_STAGING = f"{REDSHIFT_SCHEMA}.{STAGING_TABLE}"
@@ -1138,7 +1145,7 @@ flattened_df = (
 
 if DEBUG_CONTACT_ID:
     print(
-        "DEBUG — flattened rows after in-batch deduplication for "
+        "DEBUG — flattened rows after exact-version deduplication for "
         f"ContactId {DEBUG_CONTACT_ID}:"
     )
 
@@ -1161,6 +1168,78 @@ if DEBUG_CONTACT_ID:
         200,
         truncate=False,
     )
+
+
+# ============================================================
+# Keep only the latest CTR version per ContactId when requested
+#
+# For reporting, the record with the greatest LastUpdateTimestamp
+# is the current version. When timestamps tie, prefer the row with
+# the most complete Agent and Queue values.
+# ============================================================
+
+if LATEST_ONLY:
+    flattened_df = flattened_df.withColumn(
+        "_latest_agent_queue_score",
+        (
+            when(col("agent_arn").isNotNull(), lit(1)).otherwise(lit(0))
+            + when(col("agent_username").isNotNull(), lit(1)).otherwise(lit(0))
+            + when(
+                col("agent_routing_profile_name").isNotNull(),
+                lit(1),
+            ).otherwise(lit(0))
+            + when(col("queue_arn").isNotNull(), lit(1)).otherwise(lit(0))
+            + when(col("queue_name").isNotNull(), lit(1)).otherwise(lit(0))
+            + when(col("queue_duration").isNotNull(), lit(1)).otherwise(lit(0))
+        ),
+    )
+
+    latest_contact_window = (
+        Window
+        .partitionBy("contact_id")
+        .orderBy(
+            col("last_update_timestamp").desc_nulls_last(),
+            col("_latest_agent_queue_score").desc(),
+            col("etl_loaded_timestamp").desc(),
+        )
+    )
+
+    flattened_df = (
+        flattened_df
+        .withColumn(
+            "_latest_row_number",
+            row_number().over(latest_contact_window),
+        )
+        .filter(col("_latest_row_number") == 1)
+        .drop(
+            "_latest_row_number",
+            "_latest_agent_queue_score",
+        )
+    )
+
+    if DEBUG_CONTACT_ID:
+        print(
+            "DEBUG — latest selected row for ContactId "
+            f"{DEBUG_CONTACT_ID}:"
+        )
+
+        flattened_df.filter(
+            col("contact_id") == DEBUG_CONTACT_ID
+        ).select(
+            "contact_id",
+            "last_update_timestamp",
+            "agent_arn",
+            "agent_username",
+            "agent_routing_profile_name",
+            "queue_arn",
+            "queue_name",
+            "queue_duration",
+            "source_file",
+            "etl_loaded_timestamp",
+        ).show(
+            20,
+            truncate=False,
+        )
 
 
 row_count = flattened_df.count()
@@ -1272,6 +1351,7 @@ print(f"Redshift target table: {QUALIFIED_TARGET}")
 print(f"Redshift temporary directory: {REDSHIFT_TMP_DIR}")
 print(f"Debug ContactId: {DEBUG_CONTACT_ID or 'not set'}")
 print(f"Staging-only mode: {STAGING_ONLY}")
+print(f"Latest-only mode: {LATEST_ONLY}")
 
 glue_context.write_dynamic_frame.from_jdbc_conf(
     frame=output_dynamic_frame,
