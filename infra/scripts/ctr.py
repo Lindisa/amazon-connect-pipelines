@@ -45,6 +45,7 @@ args = getResolvedOptions(
         "redshift_tmp_dir",
         "redshift_schema",
         "target_table",
+        "initial_load",
     ],
 )
 
@@ -55,6 +56,7 @@ REDSHIFT_TMP_DIR = args["redshift_tmp_dir"].rstrip("/") + "/"
 REDSHIFT_DATABASE = "amazonconnectdatawarehouse"
 REDSHIFT_SCHEMA = args["redshift_schema"]
 TARGET_TABLE = args["target_table"]
+INITIAL_LOAD = args["initial_load"].strip().lower() == "true"
 
 STAGING_TABLE = f"{TARGET_TABLE}_staging"
 QUALIFIED_TARGET = f"{REDSHIFT_SCHEMA}.{TARGET_TABLE}"
@@ -270,15 +272,37 @@ super_target_columns = {
 
 # ============================================================
 # Read existing preprocessed CTR Glue Catalog table
+#
+# initial_load=true:
+#   Read the complete catalog table with Spark. This bypasses the
+#   Glue job bookmark for the source read and processes all history.
+#
+# initial_load=false:
+#   Read through a Glue DynamicFrame so the configured job bookmark
+#   limits processing to new source files.
 # ============================================================
 
-source_dynamic_frame = glue_context.create_dynamic_frame.from_catalog(
-    database=SOURCE_DATABASE,
-    table_name=SOURCE_TABLE,
-    transformation_ctx="read_existing_ctr_table",
-)
-
-source_df = source_dynamic_frame.toDF()
+if INITIAL_LOAD:
+    print(
+        "Initial load enabled: reading the complete Glue Catalog "
+        f"table {SOURCE_DATABASE}.{SOURCE_TABLE}."
+    )
+    source_df = spark.table(
+        f"`{SOURCE_DATABASE}`.`{SOURCE_TABLE}`"
+    )
+else:
+    print(
+        "Incremental load enabled: reading new source files using "
+        "the Glue job bookmark."
+    )
+    source_dynamic_frame = (
+        glue_context.create_dynamic_frame.from_catalog(
+            database=SOURCE_DATABASE,
+            table_name=SOURCE_TABLE,
+            transformation_ctx="read_existing_ctr_table_incremental",
+        )
+    )
+    source_df = source_dynamic_frame.toDF()
 
 if source_df.rdd.isEmpty():
     print("No CTR records were returned from the source table.")
@@ -287,6 +311,7 @@ if source_df.rdd.isEmpty():
 
 source_df = source_df.withColumn("_source_file", input_file_name())
 
+print(f"Initial load: {INITIAL_LOAD}")
 print("Source CTR schema:")
 source_df.printSchema()
 
@@ -965,17 +990,23 @@ flattened_df = flattened_df.filter(
 
 
 # ============================================================
-# Deduplicate only within the current incoming batch
+# Remove only exact duplicate versions within the incoming batch
 #
-# Keep the newest version of each ContactId in the current batch.
+# A CTR ContactId can legitimately have multiple versions. Preserve
+# every version with a different LastUpdateTimestamp. Collapse only
+# duplicate copies of the same ContactId + LastUpdateTimestamp.
+#
 # Existing target rows are never deleted or updated.
 # ============================================================
 
-latest_contact_window = (
+exact_version_window = (
     Window
-    .partitionBy("contact_id")
+    .partitionBy(
+        "contact_id",
+        "last_update_timestamp",
+    )
     .orderBy(
-        col("last_update_timestamp").desc_nulls_last(),
+        col("source_file").desc_nulls_last(),
         col("etl_loaded_timestamp").desc(),
     )
 )
@@ -984,7 +1015,7 @@ flattened_df = (
     flattened_df
     .withColumn(
         "_row_number",
-        row_number().over(latest_contact_window),
+        row_number().over(exact_version_window),
     )
     .filter(col("_row_number") == 1)
     .drop("_row_number")
@@ -993,7 +1024,7 @@ flattened_df = (
 
 row_count = flattened_df.count()
 
-print(f"Flattened CTR rows for this run: {row_count}")
+print(f"Flattened CTR versions prepared for this run: {row_count}")
 print("Flattened output schema:")
 flattened_df.printSchema()
 
