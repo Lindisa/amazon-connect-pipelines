@@ -1,14 +1,41 @@
-You’re right. I ignored the environment detail you had already corrected me on. Use the **STL/SVL views only**.
+The screenshots show exactly what happened:
 
-Run this to find truncates, deletes, drops, and recreates involving `public.ctr`:
+```sql
+DROP TABLE IF EXISTS public.ctr;
+```
+
+It ran at approximately:
+
+```text
+2026-07-16 04:39:59
+```
+
+with transaction ID:
+
+```text
+327016723
+```
+
+So `public.ctr` was **dropped**, not merely truncated. Afterward, the recurring process ran statements such as:
+
+```sql
+CREATE TABLE IF NOT EXISTS public.ctr (...)
+```
+
+That recreated the table structure, but it did not restore the old rows. That explains why the table exists now but returns zero rows.
+
+Reading from the table did not cause this. An explicit `DROP TABLE public.ctr` statement did.
+
+Run this to identify the Redshift user and full statement associated with that transaction:
 
 ```sql
 SELECT
     q.starttime,
     q.endtime,
+    q.xid,
+    q.query,
     q.userid,
     u.usename,
-    q.query,
     q.aborted,
     LISTAGG(TRIM(t.text), '')
         WITHIN GROUP (ORDER BY t.sequence) AS full_sql
@@ -17,66 +44,51 @@ JOIN stl_querytext t
     ON q.query = t.query
 LEFT JOIN pg_user u
     ON q.userid = u.usesysid
-WHERE q.starttime >= DATEADD(day, -7, GETDATE())
+WHERE q.xid = 327016723
 GROUP BY
     q.starttime,
     q.endtime,
+    q.xid,
+    q.query,
     q.userid,
     u.usename,
-    q.query,
     q.aborted
-HAVING
-       LOWER(LISTAGG(TRIM(t.text), '')
-           WITHIN GROUP (ORDER BY t.sequence)) LIKE '%truncate%public.ctr%'
-    OR LOWER(LISTAGG(TRIM(t.text), '')
-           WITHIN GROUP (ORDER BY t.sequence)) LIKE '%delete%from%public.ctr%'
-    OR LOWER(LISTAGG(TRIM(t.text), '')
-           WITHIN GROUP (ORDER BY t.sequence)) LIKE '%drop%table%public.ctr%'
-    OR LOWER(LISTAGG(TRIM(t.text), '')
-           WITHIN GROUP (ORDER BY t.sequence)) LIKE '%create%table%public.ctr%'
-ORDER BY q.starttime DESC;
+ORDER BY q.starttime;
 ```
 
-Also run this broader DDL check:
+Also reconstruct all DDL statements from that transaction:
 
 ```sql
 SELECT
     starttime,
     xid,
-    sequence,
-    TRIM(text) AS ddl_text
+    LISTAGG(TRIM(text), '')
+        WITHIN GROUP (ORDER BY sequence) AS full_ddl
 FROM stl_ddltext
-WHERE starttime >= DATEADD(day, -7, GETDATE())
-  AND LOWER(text) LIKE '%ctr%'
-ORDER BY starttime DESC, xid, sequence;
+WHERE xid = 327016723
+GROUP BY starttime, xid
+ORDER BY starttime;
 ```
 
-And this for deletes:
+To see which application or process opened the session, use the query ID returned above:
 
 ```sql
 SELECT
+    q.query,
     q.starttime,
     q.userid,
     u.usename,
-    q.query,
-    LISTAGG(TRIM(t.text), '')
-        WITHIN GROUP (ORDER BY t.sequence) AS full_sql
+    q.pid,
+    s.remotehost,
+    s.remoteport,
+    s.application_name
 FROM stl_query q
-JOIN stl_querytext t
-    ON q.query = t.query
 LEFT JOIN pg_user u
     ON q.userid = u.usesysid
-WHERE q.starttime >= DATEADD(day, -7, GETDATE())
-GROUP BY
-    q.starttime,
-    q.userid,
-    u.usename,
-    q.query
-HAVING LOWER(
-    LISTAGG(TRIM(t.text), '')
-    WITHIN GROUP (ORDER BY t.sequence)
-) LIKE '%delete from public.ctr%'
-ORDER BY q.starttime DESC;
+LEFT JOIN stl_sessions s
+    ON q.pid = s.process
+WHERE q.xid = 327016723
+ORDER BY q.starttime;
 ```
 
-The `usename` column will tell you which Redshift user executed it. Then match the `starttime` against your Glue job runs to identify which job or schedule caused it.
+The key finding is already confirmed: **`public.ctr` was dropped at 04:39:59 and then recreated empty.** The next step is to use the transaction query above to confirm whether the drop came from Query Editor, a Glue connection, a scheduled process, or another database user.
