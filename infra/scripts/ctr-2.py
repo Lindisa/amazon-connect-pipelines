@@ -85,7 +85,7 @@ STAGING_ONLY = (
 LATEST_ONLY = (
     get_optional_job_arg(
         "latest_only",
-        "true",
+        "false",
     ).strip().lower() == "true"
 )
 
