@@ -32,16 +32,24 @@ from pyspark.sql.window import Window
 
 
 def get_optional_job_arg(argument_name: str, default_value: str = "") -> str:
+    """
+    Read an optional Glue job argument.
+
+    Required source arguments are deliberately handled by
+    getResolvedOptions below. This helper remains only for genuinely
+    optional debugging and behaviour flags.
+    """
     flag = f"--{argument_name}"
+
     if flag not in sys.argv:
         return default_value
 
     index = sys.argv.index(flag)
+
     if index + 1 >= len(sys.argv):
         return default_value
 
     return sys.argv[index + 1]
-
 
 
 # ============================================================
@@ -52,6 +60,9 @@ args = getResolvedOptions(
     sys.argv,
     [
         "JOB_NAME",
+        "source_mode",
+        "source_s3_path",
+        "source_format",
         "source_database",
         "source_table",
         "redshift_connection_name",
@@ -62,28 +73,18 @@ args = getResolvedOptions(
     ],
 )
 
-SOURCE_DATABASE = args["source_database"]
-SOURCE_TABLE = args["source_table"]
-REDSHIFT_CONNECTION_NAME = args["redshift_connection_name"]
-REDSHIFT_TMP_DIR = args["redshift_tmp_dir"].rstrip("/") + "/"
+SOURCE_MODE = args["source_mode"].strip().lower()
+SOURCE_S3_PATH = args["source_s3_path"].strip().rstrip("/")
+SOURCE_S3_FORMAT = args["source_format"].strip().lower()
+
+SOURCE_DATABASE = args["source_database"].strip()
+SOURCE_TABLE = args["source_table"].strip()
+REDSHIFT_CONNECTION_NAME = args["redshift_connection_name"].strip()
+REDSHIFT_TMP_DIR = args["redshift_tmp_dir"].strip().rstrip("/") + "/"
 REDSHIFT_DATABASE = "amazonconnectdatawarehouse"
-REDSHIFT_SCHEMA = args["redshift_schema"]
-TARGET_TABLE = args["target_table"]
+REDSHIFT_SCHEMA = args["redshift_schema"].strip()
+TARGET_TABLE = args["target_table"].strip()
 INITIAL_LOAD = args["initial_load"].strip().lower() == "true"
-
-SOURCE_MODE = get_optional_job_arg(
-    "source_mode",
-    "catalog",
-).strip().lower()
-
-SOURCE_S3_PATH = get_optional_job_arg(
-    "source_s3_path",
-).strip().rstrip("/")
-
-SOURCE_S3_FORMAT = get_optional_job_arg(
-    "source_s3_format",
-    "parquet",
-).strip().lower()
 
 if SOURCE_MODE not in {"catalog", "s3"}:
     raise ValueError(
