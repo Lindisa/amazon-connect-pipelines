@@ -92,6 +92,13 @@ LATEST_ONLY = (
     ).strip().lower() == "true"
 )
 
+DEBUG_TIMESTAMPS = (
+    get_optional_job_arg(
+        "debug_timestamps",
+        "false",
+    ).strip().lower() == "true"
+)
+
 STAGING_TABLE = f"{TARGET_TABLE}_staging"
 QUALIFIED_TARGET = f"{REDSHIFT_SCHEMA}.{TARGET_TABLE}"
 QUALIFIED_STAGING = f"{REDSHIFT_SCHEMA}.{STAGING_TABLE}"
@@ -541,6 +548,38 @@ if DEBUG_CONTACT_ID:
         f"{DEBUG_CONTACT_ID}:"
     )
 
+    debug_contact_match_count = source_df.filter(
+        value_or_null(
+            source_df,
+            "ContactId",
+            "string",
+        ) == DEBUG_CONTACT_ID
+    ).count()
+
+    if debug_contact_match_count == 0:
+        # Nothing matched this ContactId in the current batch — this is
+        # itself useful information (typo/whitespace in the passed value,
+        # or this contact's version simply isn't present in the files
+        # this run is processing, e.g. under an incremental bookmark).
+        # Print a sample of what IS present so the exact value can be
+        # copy-pasted for a retry instead of guessed at.
+        print(
+            "DEBUG — no source rows matched ContactId "
+            f"{DEBUG_CONTACT_ID!r} in this batch. Sample of ContactIds "
+            "actually present in this run:"
+        )
+        source_df.select(
+            value_or_null(
+                source_df,
+                "ContactId",
+                "string",
+            ).alias("contact_id"),
+            col("_source_file").alias("source_file"),
+        ).distinct().orderBy("contact_id").show(
+            50,
+            truncate=False,
+        )
+
     source_df.filter(
         value_or_null(
             source_df,
@@ -619,6 +658,58 @@ if DEBUG_CONTACT_ID:
             "source_file",
         ).show(
             200,
+            truncate=False,
+        )
+    else:
+        print(
+            "DEBUG — LastUpdateTimestamp field could not be "
+            "resolved against the source schema."
+        )
+
+
+if DEBUG_TIMESTAMPS:
+    # --------------------------------------------------------
+    # Unfiltered raw-vs-parsed timestamp sample.
+    #
+    # Doesn't require knowing an affected ContactId ahead of time —
+    # useful for eyeballing whether any raw strings look malformed
+    # (missing 'Z', unexpected fractional-second precision, unusual
+    # separators, etc.) or whether parsed_last_update_timestamp looks
+    # off relative to the raw string, across an arbitrary sample of
+    # records spanning multiple source files.
+    # --------------------------------------------------------
+    debug_last_update_path, debug_last_update_type = resolve_path(
+        source_df.schema,
+        "LastUpdateTimestamp",
+    )
+
+    if debug_last_update_path is not None:
+        print(
+            "DEBUG — unfiltered LastUpdateTimestamp sample. Resolved "
+            f"Spark type: {debug_last_update_type.simpleString()}"
+        )
+
+        source_df.select(
+            value_or_null(
+                source_df,
+                "ContactId",
+                "string",
+            ).alias("contact_id"),
+            col(debug_last_update_path).alias(
+                "raw_last_update_timestamp"
+            ),
+            col(debug_last_update_path).cast("string").alias(
+                "raw_last_update_timestamp_as_string"
+            ),
+            timestamp_or_null(
+                source_df,
+                "LastUpdateTimestamp",
+            ).alias("parsed_last_update_timestamp"),
+            col("_source_file").alias("source_file"),
+        ).orderBy(
+            col("_source_file"),
+        ).show(
+            50,
             truncate=False,
         )
     else:
@@ -1455,6 +1546,7 @@ print(f"Redshift staging table: {QUALIFIED_STAGING}")
 print(f"Redshift target table: {QUALIFIED_TARGET}")
 print(f"Redshift temporary directory: {REDSHIFT_TMP_DIR}")
 print(f"Debug ContactId: {DEBUG_CONTACT_ID or 'not set'}")
+print(f"Debug timestamps mode: {DEBUG_TIMESTAMPS}")
 print(f"Staging-only mode: {STAGING_ONLY}")
 print(f"Latest-only mode: {LATEST_ONLY}")
 
