@@ -23,6 +23,9 @@ from pyspark.sql.functions import (
 from pyspark.sql.types import (
     ArrayType,
     DataType,
+    DoubleType,
+    LongType,
+    IntegerType,
     MapType,
     StringType,
     StructField,
@@ -85,7 +88,7 @@ STAGING_ONLY = (
 LATEST_ONLY = (
     get_optional_job_arg(
         "latest_only",
-        "true",
+        "false",
     ).strip().lower() == "true"
 )
 
@@ -402,16 +405,66 @@ def value_or_null(
     return col(actual_path).cast(spark_type)
 
 
+# ------------------------------------------------------------
+# NOTE ON THE 5-6 MINUTE "AHEAD" TIMESTAMP DISCREPANCY
+#
+# The previous version of timestamp_or_null() always ran
+# to_timestamp(col(actual_path)) regardless of the source field's
+# actual Spark type. If the source field is a numeric epoch value
+# (LongType/IntegerType/DoubleType e.g. epoch millis or seconds
+# for a handful of files with a different inferred schema than
+# the rest), to_timestamp() implicitly casts the number to a
+# string first ("1737360000123") and then tries to parse that
+# string as a date/time literal. That parse does not fail loudly;
+# it can produce a plausible-but-wrong timestamp instead of NULL,
+# which is consistent with only a few records being off by a
+# small, semi-consistent offset rather than the whole table being
+# wrong or NULL.
+#
+# This version:
+#   1. Inspects the resolved field's actual DataType.
+#   2. If it is numeric, treats it as epoch seconds or millis
+#      (auto-detected by magnitude) and converts explicitly instead
+#      of relying on an implicit string cast.
+#   3. If it is a string, parses as before.
+#   4. Adds an optional debug-only raw/typed passthrough so you can
+#      see exactly what Spark resolved the field to for a given
+#      ContactId (see the DEBUG_CONTACT_ID block below).
+# ------------------------------------------------------------
+
+_EPOCH_MILLIS_THRESHOLD = 10_000_000_000  # ~ year 2286 in seconds
+
+
 def timestamp_or_null(
     df: DataFrame,
     requested_path: str,
 ):
-    actual_path, _ = resolve_path(df.schema, requested_path)
+    actual_path, data_type = resolve_path(df.schema, requested_path)
 
     if actual_path is None:
         return lit(None).cast("timestamp")
 
-    return to_timestamp(col(actual_path))
+    source_col = col(actual_path)
+
+    if isinstance(data_type, (LongType, IntegerType, DoubleType)):
+        # Numeric epoch value. Auto-detect seconds vs. milliseconds by
+        # magnitude rather than assuming one or the other, since a
+        # wrong assumption here is exactly the kind of thing that
+        # produces a plausible-but-wrong timestamp a few minutes off.
+        return when(
+            source_col.isNull(),
+            lit(None).cast("timestamp"),
+        ).otherwise(
+            when(
+                source_col > _EPOCH_MILLIS_THRESHOLD,
+                (source_col / 1000).cast("timestamp"),
+            ).otherwise(
+                source_col.cast("timestamp")
+            )
+        )
+
+    # String (or anything else): parse as a timestamp literal.
+    return to_timestamp(source_col)
 
 
 def json_text_or_null(
@@ -521,6 +574,58 @@ if DEBUG_CONTACT_ID:
         200,
         truncate=False,
     )
+
+    # --------------------------------------------------------
+    # Timestamp-specific diagnostic: show the raw field exactly as
+    # Spark resolved/typed it, alongside what timestamp_or_null()
+    # converts it to. This is the fastest way to confirm whether
+    # the ~5-6 minute drift is a numeric-epoch-vs-string schema
+    # mismatch (fixed above) or something else entirely (e.g. the
+    # comparison baseline being a different/earlier CTR version).
+    # --------------------------------------------------------
+    last_update_path, last_update_type = resolve_path(
+        source_df.schema,
+        "LastUpdateTimestamp",
+    )
+
+    if last_update_path is not None:
+        print(
+            "DEBUG — LastUpdateTimestamp resolved Spark type: "
+            f"{last_update_type.simpleString()}"
+        )
+
+        source_df.filter(
+            value_or_null(
+                source_df,
+                "ContactId",
+                "string",
+            ) == DEBUG_CONTACT_ID
+        ).select(
+            value_or_null(
+                source_df,
+                "ContactId",
+                "string",
+            ).alias("contact_id"),
+            col(last_update_path).alias("raw_last_update_timestamp"),
+            col(last_update_path).cast("string").alias(
+                "raw_last_update_timestamp_as_string"
+            ),
+            timestamp_or_null(
+                source_df,
+                "LastUpdateTimestamp",
+            ).alias("parsed_last_update_timestamp"),
+            col("_source_file").alias("source_file"),
+        ).orderBy(
+            "source_file",
+        ).show(
+            200,
+            truncate=False,
+        )
+    else:
+        print(
+            "DEBUG — LastUpdateTimestamp field could not be "
+            "resolved against the source schema."
+        )
 
 
 # ============================================================
@@ -1278,20 +1383,13 @@ flattened_df.printSchema()
 
 
 # ============================================================
-# Latest-record Redshift upsert
+# Append-only Redshift load
 #
-# The flattened reporting table must contain one current row per
-# contact_id.
-#
-# Behaviour:
-# - Truncate staging before every run.
-# - The Spark window above keeps only the latest incoming version
-#   per contact_id when latest_only is enabled.
-# - Replace an existing target row only when the incoming timestamp
-#   is newer.
-# - When timestamps are equal, replace the existing row so that a
-#   more complete Agent/Queue version selected by Spark can win.
-# - Ignore an older incoming version.
+# - Truncate staging before each run.
+# - Never DELETE or UPDATE the target.
+# - Ignore an exact version already present:
+#       same contact_id + same last_update_timestamp
+# - Insert a different/newer version of the same contact_id.
 # ============================================================
 
 quoted_target_columns = ", ".join(
@@ -1314,26 +1412,6 @@ else:
     postactions = f"""
 BEGIN;
 
--- Remove the current target row only when the incoming staging row
--- is the same version or a newer version.
-DELETE FROM {QUALIFIED_TARGET} AS target
-USING {QUALIFIED_STAGING} AS source
-WHERE target.contact_id = source.contact_id
-  AND (
-        source.last_update_timestamp > target.last_update_timestamp
-        OR source.last_update_timestamp = target.last_update_timestamp
-        OR (
-            target.last_update_timestamp IS NULL
-            AND source.last_update_timestamp IS NOT NULL
-        )
-        OR (
-            target.last_update_timestamp IS NULL
-            AND source.last_update_timestamp IS NULL
-        )
-      );
-
--- Insert the incoming row only when no target row currently exists
--- for that contact_id. Older staging rows are therefore ignored.
 INSERT INTO {QUALIFIED_TARGET}
 (
     {quoted_target_columns}
@@ -1346,6 +1424,14 @@ WHERE NOT EXISTS
     SELECT 1
     FROM {QUALIFIED_TARGET} AS target
     WHERE target.contact_id = source.contact_id
+      AND (
+            target.last_update_timestamp =
+            source.last_update_timestamp
+            OR (
+                target.last_update_timestamp IS NULL
+                AND source.last_update_timestamp IS NULL
+            )
+          )
 );
 
 TRUNCATE TABLE {QUALIFIED_STAGING};
@@ -1355,7 +1441,7 @@ END;
 
 
 # ============================================================
-# Write to same-schema staging table, then upsert latest row
+# Write to same-schema staging table, then append to target
 # ============================================================
 
 output_dynamic_frame = DynamicFrame.fromDF(
