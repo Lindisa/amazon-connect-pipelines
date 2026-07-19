@@ -1,4 +1,7 @@
-CREATE TABLE IF NOT EXISTS public.ctr_flattened
+DROP TABLE IF EXISTS public.ctr_flattened_staging;
+DROP TABLE IF EXISTS public.ctr_flattened;
+
+CREATE TABLE public.ctr_flattened
 (
     aws_account_id                          VARCHAR(100),
     aws_ctr_format_version                  VARCHAR(100),
@@ -147,17 +150,13 @@ CREATE TABLE IF NOT EXISTS public.ctr_flattened
     recordings                              SUPER,
     references_data                         SUPER,
     source_file                             VARCHAR(65535),
-    etl_loaded_timestamp                    TIMESTAMPTZ DEFAULT GETDATE(),
-
-    PRIMARY KEY (contact_id)
+    etl_loaded_timestamp                    TIMESTAMPTZ DEFAULT GETDATE()
 )
 DISTSTYLE AUTO
-SORTKEY (initiation_timestamp, contact_id);
+SORTKEY (contact_id, last_update_timestamp);
 
 
-
-
-CREATE TABLE IF NOT EXISTS public.ctr_flattened_staging
+CREATE TABLE public.ctr_flattened_staging
 (
     LIKE public.ctr_flattened
 );
