@@ -1,0 +1,1365 @@
+import sys
+from typing import List, Optional, Tuple
+
+from awsglue.context import GlueContext
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.job import Job
+from awsglue.utils import getResolvedOptions
+
+from pyspark.context import SparkContext
+from pyspark.sql import DataFrame
+from pyspark.sql.functions import (
+    col,
+    current_timestamp,
+    from_json,
+    get_json_object,
+    input_file_name,
+    lit,
+    row_number,
+    to_json,
+    to_timestamp,
+    when,
+)
+from pyspark.sql.types import (
+    ArrayType,
+    DataType,
+    MapType,
+    StringType,
+    StructField,
+    StructType,
+)
+from pyspark.sql.window import Window
+
+
+def get_optional_job_arg(argument_name: str, default_value: str = "") -> str:
+    flag = f"--{argument_name}"
+    if flag not in sys.argv:
+        return default_value
+
+    index = sys.argv.index(flag)
+    if index + 1 >= len(sys.argv):
+        return default_value
+
+    return sys.argv[index + 1]
+
+
+
+# ============================================================
+# Glue job arguments
+# ============================================================
+
+args = getResolvedOptions(
+    sys.argv,
+    [
+        "JOB_NAME",
+        "source_database",
+        "source_table",
+        "redshift_connection_name",
+        "redshift_tmp_dir",
+        "redshift_schema",
+        "target_table",
+        "initial_load",
+    ],
+)
+
+SOURCE_DATABASE = args["source_database"]
+SOURCE_TABLE = args["source_table"]
+REDSHIFT_CONNECTION_NAME = args["redshift_connection_name"]
+REDSHIFT_TMP_DIR = args["redshift_tmp_dir"].rstrip("/") + "/"
+REDSHIFT_DATABASE = "amazonconnectdatawarehouse"
+REDSHIFT_SCHEMA = args["redshift_schema"]
+TARGET_TABLE = args["target_table"]
+INITIAL_LOAD = args["initial_load"].strip().lower() == "true"
+
+DEBUG_CONTACT_ID = get_optional_job_arg(
+    "debug_contact_id",
+).strip()
+
+STAGING_ONLY = (
+    get_optional_job_arg(
+        "staging_only",
+        "false",
+    ).strip().lower() == "true"
+)
+
+LATEST_ONLY = (
+    get_optional_job_arg(
+        "latest_only",
+        "false",
+    ).strip().lower() == "true"
+)
+
+STAGING_TABLE = f"{TARGET_TABLE}_staging"
+QUALIFIED_TARGET = f"{REDSHIFT_SCHEMA}.{TARGET_TABLE}"
+QUALIFIED_STAGING = f"{REDSHIFT_SCHEMA}.{STAGING_TABLE}"
+
+if not REDSHIFT_TMP_DIR.startswith(("s3://", "s3a://", "s3n://")):
+    raise ValueError(
+        "--redshift_tmp_dir must be a complete S3 URI, for example "
+        "s3://bucket-name/redshift-temp/ctr-flattened/"
+    )
+
+
+# ============================================================
+# Initialise Glue and Spark
+# ============================================================
+
+sc = SparkContext()
+glue_context = GlueContext(sc)
+spark = glue_context.spark_session
+
+job = Job(glue_context)
+job.init(args["JOB_NAME"], args)
+
+spark.conf.set("spark.sql.session.timeZone", "UTC")
+spark.conf.set("spark.sql.legacy.timeParserPolicy", "CORRECTED")
+
+
+# ============================================================
+# Existing mapping pattern
+#
+# Scalar columns are kept as ordinary Redshift columns.
+# Struct fields are extracted into individual scalar columns.
+# Only genuinely multi-valued arrays are kept as SUPER columns.
+# ============================================================
+
+all_target_columns = [
+    # Main CTR fields
+    "aws_account_id",
+    "aws_contact_trace_record_format_version",
+    "contact_id",
+    "contact_association_id",
+    "initial_contact_id",
+    "previous_contact_id",
+    "next_contact_id",
+    "related_contact_id",
+    "instance_arn",
+    "channel",
+    "initiation_method",
+    "disconnect_reason",
+    "answering_machine_detection_status",
+    "agent_connection_attempts",
+    "initiation_timestamp",
+    "connected_to_system_timestamp",
+    "disconnect_timestamp",
+    "scheduled_timestamp",
+    "transfer_completed_timestamp",
+    "last_update_timestamp",
+
+    # Agent
+    "agent_arn",
+    "agent_active_region",
+    "agent_username",
+    "agent_after_contact_work_duration",
+    "agent_after_contact_work_start_timestamp",
+    "agent_after_contact_work_end_timestamp",
+    "agent_initiated_hold_duration",
+    "agent_interaction_duration",
+    "agent_connected_to_agent_timestamp",
+    "agent_customer_hold_duration",
+    "agent_longest_hold_duration",
+    "agent_number_of_holds",
+    "agent_voice_enhancement_mode",
+    "agent_device_operating_system",
+    "agent_device_platform_name",
+    "agent_device_platform_version",
+    "agent_routing_profile_arn",
+    "agent_routing_profile_name",
+
+    # Campaign
+    "campaign_id",
+
+    # Endpoints
+    "customer_endpoint_address",
+    "customer_endpoint_type",
+    "system_endpoint_address",
+    "system_endpoint_type",
+    "transferred_to_endpoint_address",
+    "transferred_to_endpoint_type",
+
+    # Queue
+    "queue_arn",
+    "queue_name",
+    "queue_duration",
+    "queue_enqueue_timestamp",
+    "queue_dequeue_timestamp",
+
+    # Recording object
+    "recording_deletion_reason",
+    "recording_location",
+    "recording_status",
+    "recording_type",
+
+    # Contact Lens
+    "contact_lens_enabled",
+    "contact_lens_language_locale",
+    "contact_lens_redaction_behavior",
+    "contact_lens_redaction_mask_mode",
+    "contact_lens_redaction_policy",
+    "contact_lens_sentiment_behavior",
+
+    # Quality metrics
+    "quality_agent_audio_score",
+    "quality_customer_audio_score",
+
+    # Known Attributes
+    "attribute_analytics_provider",
+    "attribute_caller_cif_key",
+    "attribute_caller_id_number",
+    "attribute_caller_id_type",
+    "attribute_caller_name",
+    "attribute_caller_phone_number",
+    "attribute_contact_flow_id",
+    "attribute_context_manager_session_id",
+    "attribute_customer_number",
+    "attribute_is_analytics_enabled",
+    "attribute_is_authenticated",
+    "attribute_is_chat_analytics_enabled",
+    "attribute_is_identified",
+    "attribute_is_screen_recording_enabled",
+    "attribute_is_speech_analytics_enabled",
+    "attribute_is_survey_enabled",
+    "attribute_survey_id",
+    "attribute_account_no",
+    "attribute_all_linked_accounts",
+    "attribute_chosen_account_object",
+    "attribute_cif_key",
+    "attribute_client_group",
+    "attribute_contact_flow_name",
+    "attribute_customer_id",
+    "attribute_eval_return_code",
+    "attribute_from_telephone_banking",
+    "attribute_home_language_code",
+    "attribute_id_number",
+    "attribute_pin_type",
+    "attribute_registration_status",
+    "attribute_sbu_segment",
+    "attribute_send_to",
+    "attribute_status_fica",
+    "attribute_fic_complete",
+
+    # Attributes.callData
+    "call_data_default_ani",
+    "call_data_cif_key",
+    "call_data_id_number",
+    "call_data_connection_status",
+    "call_data_source_no",
+    "call_data_destination_no",
+    "call_data_queue_name",
+    "call_data_connection_id",
+    "call_data_context_id",
+    "call_data_is_identified",
+    "call_data_is_authenticated",
+
+    # Known Tags
+    "tag_billing_cost_center",
+    "tag_billing_department",
+    "tag_billing_division",
+    "tag_speech_analytics",
+    "tag_aws_connect_instance_id",
+    "tag_aws_connect_system_endpoint",
+
+    # Segment attributes
+    "segment_connect_subtype",
+    "segment_purpose_analytics_reference",
+    "segment_purpose_contact_search_reference",
+
+    # Pause/contact metrics visible in the existing pipeline
+    "last_paused_timestamp",
+    "last_resumed_timestamp",
+    "total_pause_count",
+    "total_pause_duration_in_seconds",
+
+    # Multi-valued fields retained as SUPER
+    "agent_hierarchy_groups",
+    "agent_state_transitions",
+    "contact_lens_analytics_modes",
+    "contact_lens_redaction_entities",
+    "contact_lens_summary_configuration",
+    "quality_agent_audio_issues",
+    "quality_customer_audio_issues",
+    "media_streams",
+    "recordings",
+    "references_data",
+
+    # Audit
+    "source_file",
+    "etl_loaded_timestamp",
+]
+
+super_target_columns = {
+    "agent_hierarchy_groups",
+    "agent_state_transitions",
+    "contact_lens_analytics_modes",
+    "contact_lens_redaction_entities",
+    "contact_lens_summary_configuration",
+    "quality_agent_audio_issues",
+    "quality_customer_audio_issues",
+    "media_streams",
+    "recordings",
+    "references_data",
+}
+
+
+# ============================================================
+# Read existing preprocessed CTR Glue Catalog table
+#
+# initial_load=true:
+#   Read the complete catalog table with Spark. This bypasses the
+#   Glue job bookmark for the source read and processes all history.
+#
+# initial_load=false:
+#   Read through a Glue DynamicFrame so the configured job bookmark
+#   limits processing to new source files.
+# ============================================================
+
+if INITIAL_LOAD:
+    print(
+        "Initial load enabled: reading the complete Glue Catalog "
+        f"table {SOURCE_DATABASE}.{SOURCE_TABLE}."
+    )
+    source_df = spark.table(
+        f"`{SOURCE_DATABASE}`.`{SOURCE_TABLE}`"
+    )
+else:
+    print(
+        "Incremental load enabled: reading new source files using "
+        "the Glue job bookmark."
+    )
+    source_dynamic_frame = (
+        glue_context.create_dynamic_frame.from_catalog(
+            database=SOURCE_DATABASE,
+            table_name=SOURCE_TABLE,
+            transformation_ctx="read_existing_ctr_table_incremental",
+        )
+    )
+    source_df = source_dynamic_frame.toDF()
+
+source_df = source_df.withColumn("_source_file", input_file_name())
+
+print(f"Initial load: {INITIAL_LOAD}")
+print("Source CTR schema:")
+source_df.printSchema()
+
+
+# ============================================================
+# Case-insensitive nested-field helpers
+# ============================================================
+
+def find_field_case_insensitive(
+    struct_type: StructType,
+    requested_name: str,
+) -> Optional[StructField]:
+    requested_lower = requested_name.lower()
+
+    for field in struct_type.fields:
+        if field.name.lower() == requested_lower:
+            return field
+
+    return None
+
+
+def resolve_path(
+    schema: StructType,
+    requested_path: str,
+) -> Tuple[Optional[str], Optional[DataType]]:
+    current_type: DataType = schema
+    actual_parts: List[str] = []
+
+    for requested_part in requested_path.split("."):
+        if not isinstance(current_type, StructType):
+            return None, None
+
+        matched_field = find_field_case_insensitive(
+            current_type,
+            requested_part,
+        )
+
+        if matched_field is None:
+            return None, None
+
+        actual_parts.append(matched_field.name)
+        current_type = matched_field.dataType
+
+    return ".".join(actual_parts), current_type
+
+
+def value_or_null(
+    df: DataFrame,
+    requested_path: str,
+    spark_type: str,
+):
+    actual_path, _ = resolve_path(df.schema, requested_path)
+
+    if actual_path is None:
+        return lit(None).cast(spark_type)
+
+    return col(actual_path).cast(spark_type)
+
+
+def timestamp_or_null(
+    df: DataFrame,
+    requested_path: str,
+):
+    actual_path, _ = resolve_path(df.schema, requested_path)
+
+    if actual_path is None:
+        return lit(None).cast("timestamp")
+
+    return to_timestamp(col(actual_path))
+
+
+def json_text_or_null(
+    df: DataFrame,
+    requested_path: str,
+):
+    actual_path, data_type = resolve_path(df.schema, requested_path)
+
+    if actual_path is None or data_type is None:
+        return lit(None).cast("string")
+
+    if isinstance(data_type, (StructType, ArrayType, MapType)):
+        return to_json(col(actual_path))
+
+    return col(actual_path).cast("string")
+
+
+def native_complex_or_null(
+    df: DataFrame,
+    requested_path: str,
+):
+    """
+    Preserve arrays, maps and structs for direct loading into SUPER.
+
+    A typed null map is returned when the source field is absent.
+    """
+    actual_path, data_type = resolve_path(df.schema, requested_path)
+
+    if actual_path is None or data_type is None:
+        return from_json(
+            lit(None).cast("string"),
+            MapType(StringType(), StringType()),
+        )
+
+    if isinstance(data_type, (StructType, ArrayType, MapType)):
+        return col(actual_path)
+
+    raise TypeError(
+        f"{requested_path} is {data_type.simpleString()}, "
+        "not a native complex field."
+    )
+
+
+def json_key_value(json_expression, key_name: str):
+    escaped_key = key_name.replace("'", "\\'")
+
+    return get_json_object(
+        json_expression,
+        f"$['{escaped_key}']",
+    )
+
+
+# ============================================================
+# JSON text used only to extract dynamic keys
+# ============================================================
+
+attributes_json = json_text_or_null(source_df, "Attributes")
+tags_json = json_text_or_null(source_df, "Tags")
+segment_attributes_json = json_text_or_null(
+    source_df,
+    "SegmentAttributes",
+)
+
+call_data_json = json_key_value(attributes_json, "callData")
+
+
+# ============================================================
+# Optional targeted source debugging
+# ============================================================
+
+if DEBUG_CONTACT_ID:
+    print(
+        "DEBUG — source rows before flattening for ContactId "
+        f"{DEBUG_CONTACT_ID}:"
+    )
+
+    source_df.filter(
+        value_or_null(
+            source_df,
+            "ContactId",
+            "string",
+        ) == DEBUG_CONTACT_ID
+    ).select(
+        value_or_null(
+            source_df,
+            "ContactId",
+            "string",
+        ).alias("contact_id"),
+        value_or_null(
+            source_df,
+            "LastUpdateTimestamp",
+            "string",
+        ).alias("last_update_timestamp"),
+        json_text_or_null(
+            source_df,
+            "Agent",
+        ).alias("agent_source_json"),
+        json_text_or_null(
+            source_df,
+            "Queue",
+        ).alias("queue_source_json"),
+        col("_source_file").alias("source_file"),
+    ).orderBy(
+        "last_update_timestamp",
+        "source_file",
+    ).show(
+        200,
+        truncate=False,
+    )
+
+
+# ============================================================
+# Flatten all scalar fields
+# ============================================================
+
+flattened_df = source_df.select(
+    # Main CTR fields
+    value_or_null(source_df, "AWSAccountId", "string")
+        .alias("aws_account_id"),
+
+    value_or_null(
+        source_df,
+        "AWSContactTraceRecordFormatVersion",
+        "string",
+    ).alias("aws_contact_trace_record_format_version"),
+
+    value_or_null(source_df, "ContactId", "string")
+        .alias("contact_id"),
+
+    value_or_null(source_df, "ContactAssociationId", "string")
+        .alias("contact_association_id"),
+
+    value_or_null(source_df, "InitialContactId", "string")
+        .alias("initial_contact_id"),
+
+    value_or_null(source_df, "PreviousContactId", "string")
+        .alias("previous_contact_id"),
+
+    value_or_null(source_df, "NextContactId", "string")
+        .alias("next_contact_id"),
+
+    value_or_null(source_df, "RelatedContactId", "string")
+        .alias("related_contact_id"),
+
+    value_or_null(source_df, "InstanceARN", "string")
+        .alias("instance_arn"),
+
+    value_or_null(source_df, "Channel", "string")
+        .alias("channel"),
+
+    value_or_null(source_df, "InitiationMethod", "string")
+        .alias("initiation_method"),
+
+    value_or_null(source_df, "DisconnectReason", "string")
+        .alias("disconnect_reason"),
+
+    value_or_null(
+        source_df,
+        "AnsweringMachineDetectionStatus",
+        "string",
+    ).alias("answering_machine_detection_status"),
+
+    value_or_null(source_df, "AgentConnectionAttempts", "long")
+        .alias("agent_connection_attempts"),
+
+    timestamp_or_null(source_df, "InitiationTimestamp")
+        .alias("initiation_timestamp"),
+
+    timestamp_or_null(source_df, "ConnectedToSystemTimestamp")
+        .alias("connected_to_system_timestamp"),
+
+    timestamp_or_null(source_df, "DisconnectTimestamp")
+        .alias("disconnect_timestamp"),
+
+    timestamp_or_null(source_df, "ScheduledTimestamp")
+        .alias("scheduled_timestamp"),
+
+    timestamp_or_null(source_df, "TransferCompletedTimestamp")
+        .alias("transfer_completed_timestamp"),
+
+    timestamp_or_null(source_df, "LastUpdateTimestamp")
+        .alias("last_update_timestamp"),
+
+    # Agent
+    value_or_null(source_df, "Agent.ARN", "string")
+        .alias("agent_arn"),
+
+    value_or_null(source_df, "Agent.ActiveRegion", "string")
+        .alias("agent_active_region"),
+
+    value_or_null(source_df, "Agent.Username", "string")
+        .alias("agent_username"),
+
+    value_or_null(
+        source_df,
+        "Agent.AfterContactWorkDuration",
+        "long",
+    ).alias("agent_after_contact_work_duration"),
+
+    timestamp_or_null(
+        source_df,
+        "Agent.AfterContactWorkStartTimestamp",
+    ).alias("agent_after_contact_work_start_timestamp"),
+
+    timestamp_or_null(
+        source_df,
+        "Agent.AfterContactWorkEndTimestamp",
+    ).alias("agent_after_contact_work_end_timestamp"),
+
+    value_or_null(
+        source_df,
+        "Agent.AgentInitiatedHoldDuration",
+        "long",
+    ).alias("agent_initiated_hold_duration"),
+
+    value_or_null(
+        source_df,
+        "Agent.AgentInteractionDuration",
+        "long",
+    ).alias("agent_interaction_duration"),
+
+    timestamp_or_null(
+        source_df,
+        "Agent.ConnectedToAgentTimestamp",
+    ).alias("agent_connected_to_agent_timestamp"),
+
+    value_or_null(
+        source_df,
+        "Agent.CustomerHoldDuration",
+        "long",
+    ).alias("agent_customer_hold_duration"),
+
+    value_or_null(
+        source_df,
+        "Agent.LongestHoldDuration",
+        "long",
+    ).alias("agent_longest_hold_duration"),
+
+    value_or_null(source_df, "Agent.NumberOfHolds", "long")
+        .alias("agent_number_of_holds"),
+
+    value_or_null(
+        source_df,
+        "Agent.VoiceEnhancementMode",
+        "string",
+    ).alias("agent_voice_enhancement_mode"),
+
+    value_or_null(
+        source_df,
+        "Agent.DeviceInfo.OperatingSystem",
+        "string",
+    ).alias("agent_device_operating_system"),
+
+    value_or_null(
+        source_df,
+        "Agent.DeviceInfo.PlatformName",
+        "string",
+    ).alias("agent_device_platform_name"),
+
+    value_or_null(
+        source_df,
+        "Agent.DeviceInfo.PlatformVersion",
+        "string",
+    ).alias("agent_device_platform_version"),
+
+    value_or_null(
+        source_df,
+        "Agent.RoutingProfile.ARN",
+        "string",
+    ).alias("agent_routing_profile_arn"),
+
+    value_or_null(
+        source_df,
+        "Agent.RoutingProfile.Name",
+        "string",
+    ).alias("agent_routing_profile_name"),
+
+    # Campaign
+    value_or_null(source_df, "Campaign.CampaignId", "string")
+        .alias("campaign_id"),
+
+    # Endpoints
+    value_or_null(
+        source_df,
+        "CustomerEndpoint.Address",
+        "string",
+    ).alias("customer_endpoint_address"),
+
+    value_or_null(
+        source_df,
+        "CustomerEndpoint.Type",
+        "string",
+    ).alias("customer_endpoint_type"),
+
+    value_or_null(
+        source_df,
+        "SystemEndpoint.Address",
+        "string",
+    ).alias("system_endpoint_address"),
+
+    value_or_null(
+        source_df,
+        "SystemEndpoint.Type",
+        "string",
+    ).alias("system_endpoint_type"),
+
+    value_or_null(
+        source_df,
+        "TransferredToEndpoint.Address",
+        "string",
+    ).alias("transferred_to_endpoint_address"),
+
+    value_or_null(
+        source_df,
+        "TransferredToEndpoint.Type",
+        "string",
+    ).alias("transferred_to_endpoint_type"),
+
+    # Queue
+    value_or_null(source_df, "Queue.ARN", "string")
+        .alias("queue_arn"),
+
+    value_or_null(source_df, "Queue.Name", "string")
+        .alias("queue_name"),
+
+    value_or_null(source_df, "Queue.Duration", "long")
+        .alias("queue_duration"),
+
+    timestamp_or_null(source_df, "Queue.EnqueueTimestamp")
+        .alias("queue_enqueue_timestamp"),
+
+    timestamp_or_null(source_df, "Queue.DequeueTimestamp")
+        .alias("queue_dequeue_timestamp"),
+
+    # Recording object
+    value_or_null(source_df, "Recording.DeletionReason", "string")
+        .alias("recording_deletion_reason"),
+
+    value_or_null(source_df, "Recording.Location", "string")
+        .alias("recording_location"),
+
+    value_or_null(source_df, "Recording.Status", "string")
+        .alias("recording_status"),
+
+    value_or_null(source_df, "Recording.Type", "string")
+        .alias("recording_type"),
+
+    # Contact Lens
+    value_or_null(
+        source_df,
+        "ContactLens.ConversationalAnalytics.Configuration.Enabled",
+        "boolean",
+    ).alias("contact_lens_enabled"),
+
+    value_or_null(
+        source_df,
+        (
+            "ContactLens.ConversationalAnalytics.Configuration."
+            "LanguageLocale"
+        ),
+        "string",
+    ).alias("contact_lens_language_locale"),
+
+    value_or_null(
+        source_df,
+        (
+            "ContactLens.ConversationalAnalytics.Configuration."
+            "RedactionConfiguration.Behavior"
+        ),
+        "string",
+    ).alias("contact_lens_redaction_behavior"),
+
+    value_or_null(
+        source_df,
+        (
+            "ContactLens.ConversationalAnalytics.Configuration."
+            "RedactionConfiguration.MaskMode"
+        ),
+        "string",
+    ).alias("contact_lens_redaction_mask_mode"),
+
+    value_or_null(
+        source_df,
+        (
+            "ContactLens.ConversationalAnalytics.Configuration."
+            "RedactionConfiguration.Policy"
+        ),
+        "string",
+    ).alias("contact_lens_redaction_policy"),
+
+    value_or_null(
+        source_df,
+        (
+            "ContactLens.ConversationalAnalytics.Configuration."
+            "SentimentConfiguration.Behavior"
+        ),
+        "string",
+    ).alias("contact_lens_sentiment_behavior"),
+
+    # Quality metrics
+    value_or_null(
+        source_df,
+        "QualityMetrics.Agent.Audio.QualityScore",
+        "double",
+    ).alias("quality_agent_audio_score"),
+
+    value_or_null(
+        source_df,
+        "QualityMetrics.Customer.Audio.QualityScore",
+        "double",
+    ).alias("quality_customer_audio_score"),
+
+    # Known Attributes
+    json_key_value(attributes_json, "AnalyticsProvider")
+        .alias("attribute_analytics_provider"),
+    json_key_value(attributes_json, "CallerCifKey")
+        .alias("attribute_caller_cif_key"),
+    json_key_value(attributes_json, "CallerIdNumber")
+        .alias("attribute_caller_id_number"),
+    json_key_value(attributes_json, "CallerIdType")
+        .alias("attribute_caller_id_type"),
+    json_key_value(attributes_json, "CallerName")
+        .alias("attribute_caller_name"),
+    json_key_value(attributes_json, "CallerPhoneNumber")
+        .alias("attribute_caller_phone_number"),
+    json_key_value(attributes_json, "ContactFlowId")
+        .alias("attribute_contact_flow_id"),
+    json_key_value(attributes_json, "ContextManagerSessionId")
+        .alias("attribute_context_manager_session_id"),
+    json_key_value(attributes_json, "CustomerNumber")
+        .alias("attribute_customer_number"),
+    json_key_value(attributes_json, "IsAnalyticsEnabled")
+        .alias("attribute_is_analytics_enabled"),
+    json_key_value(attributes_json, "IsAuthenticated")
+        .alias("attribute_is_authenticated"),
+    json_key_value(attributes_json, "IsChatAnalyticsEnabled")
+        .alias("attribute_is_chat_analytics_enabled"),
+    json_key_value(attributes_json, "IsIdentified")
+        .alias("attribute_is_identified"),
+    json_key_value(attributes_json, "IsScreenRecordingEnabled")
+        .alias("attribute_is_screen_recording_enabled"),
+    json_key_value(attributes_json, "IsSpeechAnalyticsEnabled")
+        .alias("attribute_is_speech_analytics_enabled"),
+    json_key_value(attributes_json, "IsSurveyEnabled")
+        .alias("attribute_is_survey_enabled"),
+    json_key_value(attributes_json, "SurveyId")
+        .alias("attribute_survey_id"),
+    json_key_value(attributes_json, "accountNo")
+        .alias("attribute_account_no"),
+    json_key_value(attributes_json, "allLinkedAccounts")
+        .alias("attribute_all_linked_accounts"),
+    json_key_value(attributes_json, "chosenAccountObject")
+        .alias("attribute_chosen_account_object"),
+    json_key_value(attributes_json, "cifKey")
+        .alias("attribute_cif_key"),
+    json_key_value(attributes_json, "clientGroup")
+        .alias("attribute_client_group"),
+    json_key_value(attributes_json, "contactFlowName")
+        .alias("attribute_contact_flow_name"),
+    json_key_value(attributes_json, "customerId")
+        .alias("attribute_customer_id"),
+    json_key_value(attributes_json, "evalReturnCode")
+        .alias("attribute_eval_return_code"),
+    json_key_value(attributes_json, "fromTelephoneBanking")
+        .alias("attribute_from_telephone_banking"),
+    json_key_value(attributes_json, "homeLanguageCode")
+        .alias("attribute_home_language_code"),
+    json_key_value(attributes_json, "idNumber")
+        .alias("attribute_id_number"),
+    json_key_value(attributes_json, "pinType")
+        .alias("attribute_pin_type"),
+    json_key_value(attributes_json, "registrationStatus")
+        .alias("attribute_registration_status"),
+    json_key_value(attributes_json, "sbuSegment")
+        .alias("attribute_sbu_segment"),
+    json_key_value(attributes_json, "sendTo")
+        .alias("attribute_send_to"),
+    json_key_value(attributes_json, "statusFICA")
+        .alias("attribute_status_fica"),
+    json_key_value(attributes_json, "FicComplete")
+        .alias("attribute_fic_complete"),
+
+    # Attributes.callData
+    json_key_value(call_data_json, "defaultANI")
+        .alias("call_data_default_ani"),
+    json_key_value(call_data_json, "cifKey")
+        .alias("call_data_cif_key"),
+    json_key_value(call_data_json, "idNumber")
+        .alias("call_data_id_number"),
+    json_key_value(call_data_json, "connectionStatus")
+        .alias("call_data_connection_status"),
+    json_key_value(call_data_json, "sourceNo")
+        .alias("call_data_source_no"),
+    json_key_value(call_data_json, "destinationNo")
+        .alias("call_data_destination_no"),
+    json_key_value(call_data_json, "queueName")
+        .alias("call_data_queue_name"),
+    json_key_value(call_data_json, "connectionId")
+        .alias("call_data_connection_id"),
+    json_key_value(call_data_json, "contextId")
+        .alias("call_data_context_id"),
+    json_key_value(call_data_json, "isIdentified")
+        .alias("call_data_is_identified"),
+    json_key_value(call_data_json, "isAuthenticated")
+        .alias("call_data_is_authenticated"),
+
+    # Known Tags
+    json_key_value(tags_json, "BillingCostCenter")
+        .alias("tag_billing_cost_center"),
+    json_key_value(tags_json, "BillingDepartment")
+        .alias("tag_billing_department"),
+    json_key_value(tags_json, "BillingDivision")
+        .alias("tag_billing_division"),
+    json_key_value(tags_json, "SpeechAnalytics")
+        .alias("tag_speech_analytics"),
+    json_key_value(tags_json, "aws:connect:instanceId")
+        .alias("tag_aws_connect_instance_id"),
+    json_key_value(tags_json, "aws:connect:systemEndpoint")
+        .alias("tag_aws_connect_system_endpoint"),
+
+    # Segment attributes
+    get_json_object(
+        segment_attributes_json,
+        "$['connect:Subtype'].ValueString",
+    ).alias("segment_connect_subtype"),
+
+    get_json_object(
+        segment_attributes_json,
+        (
+            "$['connect:Purpose'].ValueMap.analytics."
+            "ValueList[0].ValueString"
+        ),
+    ).alias("segment_purpose_analytics_reference"),
+
+    get_json_object(
+        segment_attributes_json,
+        (
+            "$['connect:Purpose'].ValueMap."
+            "contact-attributes-search.ValueList[0].ValueString"
+        ),
+    ).alias("segment_purpose_contact_search_reference"),
+
+    # Pause/contact metrics
+    timestamp_or_null(source_df, "LastPausedTimestamp")
+        .alias("last_paused_timestamp"),
+
+    timestamp_or_null(source_df, "LastResumedTimestamp")
+        .alias("last_resumed_timestamp"),
+
+    value_or_null(source_df, "TotalPauseCount", "long")
+        .alias("total_pause_count"),
+
+    value_or_null(
+        source_df,
+        "TotalPauseDurationInSeconds",
+        "long",
+    ).alias("total_pause_duration_in_seconds"),
+
+    # Genuinely multi-valued fields retained as SUPER
+    native_complex_or_null(
+        source_df,
+        "Agent.HierarchyGroups",
+    ).alias("agent_hierarchy_groups"),
+
+    native_complex_or_null(
+        source_df,
+        "Agent.StateTransitions",
+    ).alias("agent_state_transitions"),
+
+    native_complex_or_null(
+        source_df,
+        (
+            "ContactLens.ConversationalAnalytics.Configuration."
+            "ChannelConfiguration.AnalyticsModes"
+        ),
+    ).alias("contact_lens_analytics_modes"),
+
+    native_complex_or_null(
+        source_df,
+        (
+            "ContactLens.ConversationalAnalytics.Configuration."
+            "RedactionConfiguration.Entities"
+        ),
+    ).alias("contact_lens_redaction_entities"),
+
+    native_complex_or_null(
+        source_df,
+        (
+            "ContactLens.ConversationalAnalytics.Configuration."
+            "SummaryConfiguration"
+        ),
+    ).alias("contact_lens_summary_configuration"),
+
+    native_complex_or_null(
+        source_df,
+        "QualityMetrics.Agent.Audio.PotentialQualityIssues",
+    ).alias("quality_agent_audio_issues"),
+
+    native_complex_or_null(
+        source_df,
+        "QualityMetrics.Customer.Audio.PotentialQualityIssues",
+    ).alias("quality_customer_audio_issues"),
+
+    native_complex_or_null(
+        source_df,
+        "MediaStreams",
+    ).alias("media_streams"),
+
+    native_complex_or_null(
+        source_df,
+        "Recordings",
+    ).alias("recordings"),
+
+    # References is stored as JSON text in the preprocessed Glue table.
+    # Parse it back into an array so it can load into the Redshift SUPER column.
+    from_json(
+        json_text_or_null(
+            source_df,
+            "References",
+        ),
+        ArrayType(
+            MapType(
+                StringType(),
+                StringType(),
+                valueContainsNull=True,
+            ),
+            containsNull=True,
+        ),
+    ).alias("references_data"),
+
+    col("_source_file").cast("string").alias("source_file"),
+    current_timestamp().alias("etl_loaded_timestamp"),
+)
+
+
+# ============================================================
+# Keep target-column ordering aligned with the Redshift DDL
+# ============================================================
+
+flattened_df = flattened_df.select(
+    *[col(column_name) for column_name in all_target_columns]
+)
+
+
+# ============================================================
+# Remove invalid records
+# ============================================================
+
+flattened_df = flattened_df.filter(
+    col("contact_id").isNotNull()
+)
+
+if DEBUG_CONTACT_ID:
+    print(
+        "DEBUG — flattened rows before in-batch deduplication for "
+        f"ContactId {DEBUG_CONTACT_ID}:"
+    )
+
+    flattened_df.filter(
+        col("contact_id") == DEBUG_CONTACT_ID
+    ).select(
+        "contact_id",
+        "last_update_timestamp",
+        "agent_arn",
+        "agent_username",
+        "agent_routing_profile_name",
+        "queue_arn",
+        "queue_name",
+        "queue_duration",
+        "source_file",
+        "etl_loaded_timestamp",
+    ).orderBy(
+        "last_update_timestamp",
+        "source_file",
+    ).show(
+        200,
+        truncate=False,
+    )
+
+
+# ============================================================
+# Remove only exact duplicate versions within the incoming batch
+#
+# A CTR ContactId can legitimately have multiple versions. Preserve
+# every version with a different LastUpdateTimestamp. Collapse only
+# duplicate copies of the same ContactId + LastUpdateTimestamp.
+#
+# Existing target rows are never deleted or updated.
+# ============================================================
+
+flattened_df = flattened_df.withColumn(
+    "_agent_queue_completeness_score",
+    (
+        when(col("agent_arn").isNotNull(), lit(1)).otherwise(lit(0))
+        + when(col("agent_username").isNotNull(), lit(1)).otherwise(lit(0))
+        + when(
+            col("agent_routing_profile_name").isNotNull(),
+            lit(1),
+        ).otherwise(lit(0))
+        + when(col("queue_arn").isNotNull(), lit(1)).otherwise(lit(0))
+        + when(col("queue_name").isNotNull(), lit(1)).otherwise(lit(0))
+        + when(col("queue_duration").isNotNull(), lit(1)).otherwise(lit(0))
+    ),
+)
+
+exact_version_window = (
+    Window
+    .partitionBy(
+        "contact_id",
+        "last_update_timestamp",
+    )
+    .orderBy(
+        col("_agent_queue_completeness_score").desc(),
+        col("source_file").desc_nulls_last(),
+        col("etl_loaded_timestamp").desc(),
+    )
+)
+
+flattened_df = (
+    flattened_df
+    .withColumn(
+        "_row_number",
+        row_number().over(exact_version_window),
+    )
+    .filter(col("_row_number") == 1)
+    .drop(
+        "_row_number",
+        "_agent_queue_completeness_score",
+    )
+)
+
+if DEBUG_CONTACT_ID:
+    print(
+        "DEBUG — flattened rows after exact-version deduplication for "
+        f"ContactId {DEBUG_CONTACT_ID}:"
+    )
+
+    flattened_df.filter(
+        col("contact_id") == DEBUG_CONTACT_ID
+    ).select(
+        "contact_id",
+        "last_update_timestamp",
+        "agent_arn",
+        "agent_username",
+        "agent_routing_profile_name",
+        "queue_arn",
+        "queue_name",
+        "queue_duration",
+        "source_file",
+        "etl_loaded_timestamp",
+    ).orderBy(
+        "last_update_timestamp",
+    ).show(
+        200,
+        truncate=False,
+    )
+
+
+# ============================================================
+# Keep only the latest CTR version per ContactId when requested
+#
+# For reporting, the record with the greatest LastUpdateTimestamp
+# is the current version. When timestamps tie, prefer the row with
+# the most complete Agent and Queue values.
+# ============================================================
+
+if LATEST_ONLY:
+    flattened_df = flattened_df.withColumn(
+        "_latest_agent_queue_score",
+        (
+            when(col("agent_arn").isNotNull(), lit(1)).otherwise(lit(0))
+            + when(col("agent_username").isNotNull(), lit(1)).otherwise(lit(0))
+            + when(
+                col("agent_routing_profile_name").isNotNull(),
+                lit(1),
+            ).otherwise(lit(0))
+            + when(col("queue_arn").isNotNull(), lit(1)).otherwise(lit(0))
+            + when(col("queue_name").isNotNull(), lit(1)).otherwise(lit(0))
+            + when(col("queue_duration").isNotNull(), lit(1)).otherwise(lit(0))
+        ),
+    )
+
+    latest_contact_window = (
+        Window
+        .partitionBy("contact_id")
+        .orderBy(
+            col("last_update_timestamp").desc_nulls_last(),
+            col("_latest_agent_queue_score").desc(),
+            col("etl_loaded_timestamp").desc(),
+        )
+    )
+
+    flattened_df = (
+        flattened_df
+        .withColumn(
+            "_latest_row_number",
+            row_number().over(latest_contact_window),
+        )
+        .filter(col("_latest_row_number") == 1)
+        .drop(
+            "_latest_row_number",
+            "_latest_agent_queue_score",
+        )
+    )
+
+    if DEBUG_CONTACT_ID:
+        print(
+            "DEBUG — latest selected row for ContactId "
+            f"{DEBUG_CONTACT_ID}:"
+        )
+
+        flattened_df.filter(
+            col("contact_id") == DEBUG_CONTACT_ID
+        ).select(
+            "contact_id",
+            "last_update_timestamp",
+            "agent_arn",
+            "agent_username",
+            "agent_routing_profile_name",
+            "queue_arn",
+            "queue_name",
+            "queue_duration",
+            "source_file",
+            "etl_loaded_timestamp",
+        ).show(
+            20,
+            truncate=False,
+        )
+
+
+row_count = flattened_df.count()
+
+print(f"Flattened CTR versions prepared for this run: {row_count}")
+print("Flattened output schema:")
+flattened_df.printSchema()
+
+if row_count == 0:
+    print("No new valid CTR rows were returned.")
+    print("The run will complete successfully without writing to Redshift.")
+else:
+
+    # ============================================================
+    # Flatten the schema before creating a DynamicFrame
+    #
+    # Glue's JDBC DynamicFrame sink requires a flat schema. Convert only the
+    # columns destined for Redshift SUPER from Spark arrays/structs/maps into
+    # valid JSON strings. The scalar fields remain ordinary queryable columns.
+    # ============================================================
+
+    for column_name in super_target_columns:
+        flattened_df = flattened_df.withColumn(
+            column_name,
+            when(
+                col(column_name).isNull(),
+                lit("null"),
+            ).otherwise(
+                to_json(col(column_name))
+            ),
+        )
+
+    print("Flat output schema sent to the Redshift sink:")
+    flattened_df.printSchema()
+
+
+    # ============================================================
+    # Append-only Redshift load
+    #
+    # - Truncate staging before each run.
+    # - Never DELETE or UPDATE the target.
+    # - Ignore an exact version already present:
+    #       same contact_id + same last_update_timestamp
+    # - Insert a different/newer version of the same contact_id.
+    # ============================================================
+
+    quoted_target_columns = ", ".join(
+        f'"{column_name}"'
+        for column_name in all_target_columns
+    )
+
+    quoted_source_columns = ", ".join(
+        f'source."{column_name}"'
+        for column_name in all_target_columns
+    )
+
+    preactions = f"""
+    TRUNCATE TABLE {QUALIFIED_STAGING};
+    """
+
+    if STAGING_ONLY:
+        postactions = ""
+    else:
+        postactions = f"""
+    BEGIN;
+
+    INSERT INTO {QUALIFIED_TARGET}
+    (
+        {quoted_target_columns}
+    )
+    SELECT
+        {quoted_source_columns}
+    FROM {QUALIFIED_STAGING} AS source
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM {QUALIFIED_TARGET} AS target
+        WHERE target.contact_id = source.contact_id
+          AND (
+                target.last_update_timestamp =
+                source.last_update_timestamp
+                OR (
+                    target.last_update_timestamp IS NULL
+                    AND source.last_update_timestamp IS NULL
+                )
+              )
+    );
+
+    TRUNCATE TABLE {QUALIFIED_STAGING};
+
+    END;
+    """
+
+
+    # ============================================================
+    # Write to same-schema staging table, then append to target
+    # ============================================================
+
+    output_dynamic_frame = DynamicFrame.fromDF(
+        flattened_df,
+        glue_context,
+        "flattened_ctr_output",
+    )
+
+    print(f"Redshift database: {REDSHIFT_DATABASE}")
+    print(f"Redshift staging table: {QUALIFIED_STAGING}")
+    print(f"Redshift target table: {QUALIFIED_TARGET}")
+    print(f"Redshift temporary directory: {REDSHIFT_TMP_DIR}")
+    print(f"Debug ContactId: {DEBUG_CONTACT_ID or 'not set'}")
+    print(f"Staging-only mode: {STAGING_ONLY}")
+    print(f"Latest-only mode: {LATEST_ONLY}")
+
+    glue_context.write_dynamic_frame.from_jdbc_conf(
+        frame=output_dynamic_frame,
+        catalog_connection=REDSHIFT_CONNECTION_NAME,
+        connection_options={
+            "dbtable": QUALIFIED_STAGING,
+            "database": REDSHIFT_DATABASE,
+            "preactions": preactions,
+            "postactions": postactions,
+            "tempformat": "CSV GZIP",
+            "extracopyoptions": "TIMEFORMAT 'auto'",
+        },
+        redshift_tmp_dir=REDSHIFT_TMP_DIR,
+        transformation_ctx="write_ctr_flattened_to_redshift",
+    )
+
+job.commit()
