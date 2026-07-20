@@ -1,4 +1,44 @@
-WITH latest_ctr AS (
+SELECT
+    f.contact_id,
+    f.agent_arn AS flattened_agent_arn,
+    c.ctr_agent_arn,
+    f.queue_arn AS flattened_queue_arn,
+    c.ctr_queue_arn
+FROM public.ctr_flattened f
+JOIN (
+    SELECT
+        contact_id,
+        JSON_EXTRACT_PATH_TEXT(
+            JSON_SERIALIZE(agent),
+            'ARN',
+            true
+        ) AS ctr_agent_arn,
+        JSON_EXTRACT_PATH_TEXT(
+            JSON_SERIALIZE(queue),
+            'ARN',
+            true
+        ) AS ctr_queue_arn
+    FROM public.ctr
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY contact_id
+        ORDER BY last_update_timestamp DESC
+    ) = 1
+) c
+    ON c.contact_id = f.contact_id
+WHERE
+    (
+        f.agent_arn IS NULL
+        AND NULLIF(TRIM(c.ctr_agent_arn), '') IS NOT NULL
+    )
+    OR
+    (
+        f.queue_arn IS NULL
+        AND NULLIF(TRIM(c.ctr_queue_arn), '') IS NOT NULL
+    );
+
+
+
+
     SELECT
         contact_id,
         last_update_timestamp,
