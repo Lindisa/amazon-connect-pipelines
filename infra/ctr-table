@@ -8,21 +8,28 @@ FROM public.ctr_flattened f
 JOIN (
     SELECT
         contact_id,
-        JSON_EXTRACT_PATH_TEXT(
-            JSON_SERIALIZE(agent),
-            'ARN',
-            true
-        ) AS ctr_agent_arn,
-        JSON_EXTRACT_PATH_TEXT(
-            JSON_SERIALIZE(queue),
-            'ARN',
-            true
-        ) AS ctr_queue_arn
-    FROM public.ctr
-    QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY contact_id
-        ORDER BY last_update_timestamp DESC
-    ) = 1
+        ctr_agent_arn,
+        ctr_queue_arn
+    FROM (
+        SELECT
+            contact_id,
+            JSON_EXTRACT_PATH_TEXT(
+                JSON_SERIALIZE(agent),
+                'ARN',
+                true
+            ) AS ctr_agent_arn,
+            JSON_EXTRACT_PATH_TEXT(
+                JSON_SERIALIZE(queue),
+                'ARN',
+                true
+            ) AS ctr_queue_arn,
+            ROW_NUMBER() OVER (
+                PARTITION BY contact_id
+                ORDER BY last_update_timestamp DESC
+            ) AS rn
+        FROM public.ctr
+    ) ranked_ctr
+    WHERE rn = 1
 ) c
     ON c.contact_id = f.contact_id
 WHERE
@@ -35,7 +42,6 @@ WHERE
         f.queue_arn IS NULL
         AND NULLIF(TRIM(c.ctr_queue_arn), '') IS NOT NULL
     );
-
 
 
 
