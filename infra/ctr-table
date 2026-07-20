@@ -1,20 +1,14 @@
 SELECT
     f.contact_id,
     f.last_update_timestamp AS flattened_timestamp,
-    MAX(c.last_update_timestamp) AS latest_ctr_timestamp,
-    DATEDIFF(
-        second,
-        MAX(c.last_update_timestamp),
-        f.last_update_timestamp
-    ) AS difference_seconds
+    MAX(c.last_update_timestamp) AS latest_ctr_timestamp
 FROM public.ctr_flattened f
 JOIN public.ctr c
     ON c.contact_id = f.contact_id
 GROUP BY
     f.contact_id,
     f.last_update_timestamp
-HAVING
-    f.last_update_timestamp <> MAX(c.last_update_timestamp);
+HAVING f.last_update_timestamp <> MAX(c.last_update_timestamp);
 
 
 
