@@ -1,3 +1,18 @@
+UPDATE public.ctr_flattened AS f
+SET last_update_timestamp = c.latest_ctr_timestamp
+FROM (
+    SELECT
+        contact_id,
+        MAX(last_update_timestamp) AS latest_ctr_timestamp
+    FROM public.ctr
+    GROUP BY contact_id
+) c
+WHERE f.contact_id = c.contact_id
+  AND f.last_update_timestamp <> c.latest_ctr_timestamp;
+
+
+
+
 SELECT
     f.contact_id,
     f.agent_arn AS flattened_agent_arn,
