@@ -6,7 +6,7 @@ from awsglue.dynamicframe import DynamicFrame
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
 
-from pyspark.context import SparkContextxx
+from pyspark.context import SparkContext
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import (
     col,
@@ -85,7 +85,7 @@ STAGING_ONLY = (
 LATEST_ONLY = (
     get_optional_job_arg(
         "latest_only",
-        "true",
+        "false",
     ).strip().lower() == "true"
 )
 
@@ -334,6 +334,11 @@ else:
         )
     )
     source_df = source_dynamic_frame.toDF()
+
+if source_df.rdd.isEmpty():
+    print("No CTR records were returned from the source table.")
+    job.commit()
+    sys.exit(0)
 
 source_df = source_df.withColumn("_source_file", input_file_name())
 
@@ -1244,123 +1249,123 @@ print("Flattened output schema:")
 flattened_df.printSchema()
 
 if row_count == 0:
-    if INITIAL_LOAD:
-        print("No valid CTR rows were returned for the initial load.")
-    else:
-        print("No new valid CTR rows were returned for this incremental run.")
-    print("Run completed successfully with no Redshift load required.")
+    print("No valid CTR rows remain after filtering.")
+    job.commit()
+    sys.exit(0)
+
+
+# ============================================================
+# Flatten the schema before creating a DynamicFrame
+#
+# Glue's JDBC DynamicFrame sink requires a flat schema. Convert only the
+# columns destined for Redshift SUPER from Spark arrays/structs/maps into
+# valid JSON strings. The scalar fields remain ordinary queryable columns.
+# ============================================================
+
+for column_name in super_target_columns:
+    flattened_df = flattened_df.withColumn(
+        column_name,
+        when(
+            col(column_name).isNull(),
+            lit("null"),
+        ).otherwise(
+            to_json(col(column_name))
+        ),
+    )
+
+print("Flat output schema sent to the Redshift sink:")
+flattened_df.printSchema()
+
+
+# ============================================================
+# Append-only Redshift load
+#
+# - Truncate staging before each run.
+# - Never DELETE or UPDATE the target.
+# - Ignore an exact version already present:
+#       same contact_id + same last_update_timestamp
+# - Insert a different/newer version of the same contact_id.
+# ============================================================
+
+quoted_target_columns = ", ".join(
+    f'"{column_name}"'
+    for column_name in all_target_columns
+)
+
+quoted_source_columns = ", ".join(
+    f'source."{column_name}"'
+    for column_name in all_target_columns
+)
+
+preactions = f"""
+TRUNCATE TABLE {QUALIFIED_STAGING};
+"""
+
+if STAGING_ONLY:
+    postactions = ""
 else:
-    # ============================================================
-    # Flatten the schema before creating a DynamicFrame
-    #
-    # Glue's JDBC DynamicFrame sink requires a flat schema. Convert only the
-    # columns destined for Redshift SUPER from Spark arrays/structs/maps into
-    # valid JSON strings. The scalar fields remain ordinary queryable columns.
-    # ============================================================
+    postactions = f"""
+BEGIN;
 
-    for column_name in super_target_columns:
-        flattened_df = flattened_df.withColumn(
-            column_name,
-            when(
-                col(column_name).isNull(),
-                lit("null"),
-            ).otherwise(
-                to_json(col(column_name))
-            ),
-        )
+INSERT INTO {QUALIFIED_TARGET}
+(
+    {quoted_target_columns}
+)
+SELECT
+    {quoted_source_columns}
+FROM {QUALIFIED_STAGING} AS source
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM {QUALIFIED_TARGET} AS target
+    WHERE target.contact_id = source.contact_id
+      AND (
+            target.last_update_timestamp =
+            source.last_update_timestamp
+            OR (
+                target.last_update_timestamp IS NULL
+                AND source.last_update_timestamp IS NULL
+            )
+          )
+);
 
-    print("Flat output schema sent to the Redshift sink:")
-    flattened_df.printSchema()
+TRUNCATE TABLE {QUALIFIED_STAGING};
 
-
-    # ============================================================
-    # Insert-only Redshift load
-    #
-    # - Truncate staging before every run.
-    # - Do not DELETE or UPDATE the target table.
-    # - Insert only when the same contact_id + last_update_timestamp
-    #   version is not already present.
-    # ============================================================
-
-    quoted_target_columns = ", ".join(
-        f'"{column_name}"'
-        for column_name in all_target_columns
-    )
-
-    quoted_source_columns = ", ".join(
-        f'source."{column_name}"'
-        for column_name in all_target_columns
-    )
-
-    preactions = f"""
-    TRUNCATE TABLE {QUALIFIED_STAGING};
-    """
-
-    if STAGING_ONLY:
-        postactions = ""
-    else:
-        postactions = f"""
-    BEGIN;
-
-    INSERT INTO {QUALIFIED_TARGET}
-    (
-        {quoted_target_columns}
-    )
-    SELECT
-        {quoted_source_columns}
-    FROM {QUALIFIED_STAGING} AS source
-    WHERE NOT EXISTS
-    (
-        SELECT 1
-        FROM {QUALIFIED_TARGET} AS target
-        WHERE target.contact_id = source.contact_id
-          AND (
-                target.last_update_timestamp =
-                source.last_update_timestamp
-                OR (
-                    target.last_update_timestamp IS NULL
-                    AND source.last_update_timestamp IS NULL
-                )
-              )
-    );
-
-    TRUNCATE TABLE {QUALIFIED_STAGING};
-
-    END;
-    """
+END;
+"""
 
 
-    # ============================================================
-    # Write to same-schema staging table, then insert new versions
-    # ============================================================
+# ============================================================
+# Write to same-schema staging table, then append to target
+# ============================================================
 
-    output_dynamic_frame = DynamicFrame.fromDF(
-        flattened_df,
-        glue_context,
-        "flattened_ctr_output",
-    )
+output_dynamic_frame = DynamicFrame.fromDF(
+    flattened_df,
+    glue_context,
+    "flattened_ctr_output",
+)
 
-    print(f"Redshift database: {REDSHIFT_DATABASE}")
-    print(f"Redshift staging table: {QUALIFIED_STAGING}")
-    print(f"Redshift target table: {QUALIFIED_TARGET}")
-    print(f"Redshift temporary directory: {REDSHIFT_TMP_DIR}")
-    print(f"Debug ContactId: {DEBUG_CONTACT_ID or 'not set'}")
-    print(f"Staging-only mode: {STAGING_ONLY}")
-    print(f"Latest-only mode: {LATEST_ONLY}")
+print(f"Redshift database: {REDSHIFT_DATABASE}")
+print(f"Redshift staging table: {QUALIFIED_STAGING}")
+print(f"Redshift target table: {QUALIFIED_TARGET}")
+print(f"Redshift temporary directory: {REDSHIFT_TMP_DIR}")
+print(f"Debug ContactId: {DEBUG_CONTACT_ID or 'not set'}")
+print(f"Staging-only mode: {STAGING_ONLY}")
+print(f"Latest-only mode: {LATEST_ONLY}")
 
-    glue_context.write_dynamic_frame.from_jdbc_conf(
-        frame=output_dynamic_frame,
-        catalog_connection=REDSHIFT_CONNECTION_NAME,
-        connection_options={
-            "dbtable": QUALIFIED_STAGING,
-            "database": REDSHIFT_DATABASE,
-            "preactions": preactions,
-            "postactions": postactions,
-            "tempformat": "CSV GZIP",
-            "extracopyoptions": "TIMEFORMAT 'auto'",
-        },
-        redshift_tmp_dir=REDSHIFT_TMP_DIR,
-        transformation_ctx="write_ctr_flattened_to_redshift",
-    )
+glue_context.write_dynamic_frame.from_jdbc_conf(
+    frame=output_dynamic_frame,
+    catalog_connection=REDSHIFT_CONNECTION_NAME,
+    connection_options={
+        "dbtable": QUALIFIED_STAGING,
+        "database": REDSHIFT_DATABASE,
+        "preactions": preactions,
+        "postactions": postactions,
+        "tempformat": "CSV GZIP",
+        "extracopyoptions": "TIMEFORMAT 'auto'",
+    },
+    redshift_tmp_dir=REDSHIFT_TMP_DIR,
+    transformation_ctx="write_ctr_flattened_to_redshift",
+)
 
 job.commit()
