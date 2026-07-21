@@ -1,0 +1,26 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.tfstate.lock.info
+
+# Terraform plans
+**/tfplan*
+**/terraform*.plan
+**/plan*.out
+
+# IDE
+.vscode
+.idea
+
+# Certificates
+.pem
+
+# macOS
+.DS_Store
