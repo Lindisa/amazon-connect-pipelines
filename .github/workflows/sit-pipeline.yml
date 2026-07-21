@@ -1,6 +1,5 @@
-name: SIT Terraform Pipeline
+name: SIT Terraform CD Pipeline
 
-# Workflow to deploy infrastructure to SIT
 on:
   push:
     branches:
@@ -18,19 +17,25 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  TF_IN_AUTOMATION: true
   TF_WORKING_DIR: infra/env/sit
+
+  TFVARS_FILE: contact-lens-pipeline.tfvars
+  TFVARS_S3_KEY: terraform/sit/af-south-1/contact-lens-pipeline.tfvars
+
   PLAN_FILE: tfplan
-  PLAN_S3_KEY: artifacts/sit/contact-evaluations/${{ github.run_id }}/tfplan
+  PLAN_S3_KEY: artifacts/sit/contact-lens-pipeline/${{ github.run_id }}/tfplan
 
 jobs:
   validate:
-    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    name: Validate Terraform
+    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
     environment: sit
     timeout-minutes: 30
 
     defaults:
       run:
-        working-directory: infra/env/sit
+        working-directory: ${{ env.TF_WORKING_DIR }}
 
     steps:
       - name: Checkout code
@@ -44,38 +49,41 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
           sudo update-ca-trust
-          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> $GITHUB_ENV
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+          echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
 
       - name: Install Terraform
         run: |
           sudo yum install -y yum-utils
           sudo yum-config-manager \
-            --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
-          sudo yum -y install terraform
+            --add-repo \
+            https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          sudo yum install -y terraform
           terraform --version
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -input=false
 
       - name: Terraform Validate
         run: terraform validate
 
   plan:
+    name: Terraform Plan
     needs:
       - validate
 
-    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
     environment: sit
     timeout-minutes: 30
 
     defaults:
       run:
-        working-directory: infra/env/sit
+        working-directory: ${{ env.TF_WORKING_DIR }}
 
     steps:
       - name: Checkout code
@@ -89,41 +97,56 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
           sudo update-ca-trust
-          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> $GITHUB_ENV
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+          echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
 
       - name: Install Terraform
         run: |
           sudo yum install -y yum-utils
           sudo yum-config-manager \
-            --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
-          sudo yum -y install terraform
+            --add-repo \
+            https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          sudo yum install -y terraform
           terraform --version
 
-      - name: Terraform Init
-        run: terraform init
-
-      - name: Terraform Plan
-        run: terraform plan -out=${{ env.PLAN_FILE }}
-
-      - name: Upload tfplan to S3
+      - name: Fetch Terraform variables
         run: |
           aws s3 cp \
-            ${{ env.PLAN_FILE }} \
-            s3://${{ vars.ARTIFACTS_BUCKET_NAME }}/${{ env.PLAN_S3_KEY }}
+            s3://${{ vars.TF_VARIABLES_BUCKET_NAME }}/${{ env.TFVARS_S3_KEY }} \
+            ./${{ env.TFVARS_FILE }}
+
+          test -s "./${{ env.TFVARS_FILE }}"
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -input=false \
+            -var-file="${{ env.TFVARS_FILE }}" \
+            -out="${{ env.PLAN_FILE }}"
+
+      - name: Upload Terraform plan to S3
+        run: |
+          aws s3 cp \
+            "${{ env.PLAN_FILE }}" \
+            "s3://${{ vars.ARTIFACTS_BUCKET_NAME }}/${{ env.PLAN_S3_KEY }}"
 
   apply:
+    name: Terraform Apply
     needs:
       - plan
 
-    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
     environment: sit
     timeout-minutes: 30
 
     defaults:
       run:
-        working-directory: infra/env/sit
+        working-directory: ${{ env.TF_WORKING_DIR }}
 
     steps:
       - name: Checkout code
@@ -137,26 +160,34 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
           sudo update-ca-trust
-          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> $GITHUB_ENV
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+          echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
 
       - name: Install Terraform
         run: |
           sudo yum install -y yum-utils
           sudo yum-config-manager \
-            --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
-          sudo yum -y install terraform
+            --add-repo \
+            https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          sudo yum install -y terraform
           terraform --version
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -input=false
 
-      - name: Download tfplan
+      - name: Download Terraform plan
         run: |
           aws s3 cp \
-            s3://${{ vars.ARTIFACTS_BUCKET_NAME }}/${{ env.PLAN_S3_KEY }} \
-            ${{ env.PLAN_FILE }}
+            "s3://${{ vars.ARTIFACTS_BUCKET_NAME }}/${{ env.PLAN_S3_KEY }}" \
+            "${{ env.PLAN_FILE }}"
+
+          test -s "${{ env.PLAN_FILE }}"
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve ${{ env.PLAN_FILE }}
+        run: |
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            "${{ env.PLAN_FILE }}"
