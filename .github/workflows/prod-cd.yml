@@ -1,0 +1,195 @@
+name: Production Terraform CD Pipeline
+
+on:
+  push:
+    branches:
+      - prod
+    paths:
+      - "infra/env/prod/**"
+      - "infra/modules/**"
+      - ".github/workflows/**"
+      - "scripts/**"
+
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_WORKING_DIR: infra/env/prod
+
+  TFVARS_FILE: contact-lens-pipeline.tfvars
+  TFVARS_S3_KEY: terraform/prod/af-south-1/contact-lens-pipeline.tfvars
+
+  PLAN_FILE: tfplan
+  PLAN_S3_KEY: artifacts/prod/contact-lens-pipeline/${{ github.run_id }}/tfplan
+
+jobs:
+  validate:
+    name: Validate Terraform
+    runs-on: codebuild-npsenvoiceprod-prod-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    environment: prod
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch Netskope certificate
+        run: |
+          aws s3 cp \
+            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            ./bundle.pem
+
+      - name: Configure SSL certificate
+        run: |
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo update-ca-trust
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+          echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+
+      - name: Install Terraform
+        run: |
+          sudo yum install -y yum-utils
+          sudo yum-config-manager \
+            --add-repo \
+            https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          sudo yum install -y terraform
+          terraform --version
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+  plan:
+    name: Terraform Plan
+    needs:
+      - validate
+
+    runs-on: codebuild-npsenvoiceprod-prod-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    environment: prod
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch Netskope certificate
+        run: |
+          aws s3 cp \
+            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            ./bundle.pem
+
+      - name: Configure SSL certificate
+        run: |
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo update-ca-trust
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+          echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+
+      - name: Install Terraform
+        run: |
+          sudo yum install -y yum-utils
+          sudo yum-config-manager \
+            --add-repo \
+            https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          sudo yum install -y terraform
+          terraform --version
+
+      - name: Fetch Terraform variables
+        run: |
+          aws s3 cp \
+            s3://${{ vars.TF_VARIABLES_BUCKET_NAME }}/${{ env.TFVARS_S3_KEY }} \
+            ./${{ env.TFVARS_FILE }}
+
+          test -s "./${{ env.TFVARS_FILE }}"
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -input=false \
+            -var-file="${{ env.TFVARS_FILE }}" \
+            -out="${{ env.PLAN_FILE }}"
+
+      - name: Upload Terraform plan to S3
+        run: |
+          aws s3 cp \
+            "${{ env.PLAN_FILE }}" \
+            "s3://${{ vars.ARTIFACTS_BUCKET_NAME }}/${{ env.PLAN_S3_KEY }}"
+
+  apply:
+    name: Terraform Apply
+    needs:
+      - plan
+
+    # Configure required reviewers on the GitHub prod environment.
+    environment: prod
+
+    runs-on: codebuild-npsenvoiceprod-prod-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch Netskope certificate
+        run: |
+          aws s3 cp \
+            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            ./bundle.pem
+
+      - name: Configure SSL certificate
+        run: |
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo update-ca-trust
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+          echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+
+      - name: Install Terraform
+        run: |
+          sudo yum install -y yum-utils
+          sudo yum-config-manager \
+            --add-repo \
+            https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          sudo yum install -y terraform
+          terraform --version
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Download Terraform plan
+        run: |
+          aws s3 cp \
+            "s3://${{ vars.ARTIFACTS_BUCKET_NAME }}/${{ env.PLAN_S3_KEY }}" \
+            "${{ env.PLAN_FILE }}"
+
+          test -s "${{ env.PLAN_FILE }}"
+
+      - name: Terraform Apply
+        run: |
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            "${{ env.PLAN_FILE }}"
