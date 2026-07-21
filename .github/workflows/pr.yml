@@ -1,0 +1,103 @@
+name: Pull Request Terraform Checks
+
+on:
+  pull_request:
+    branches:
+      - dev
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+    paths:
+      - "infra/env/dev/**"
+      - "infra/modules/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+      - ".gitignore"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_WORKING_DIR: infra/env/dev
+  TFVARS_FILE: contact-lens-pipeline.tfvars
+  TFVARS_S3_KEY: terraform/dev/af-south-1/contact-lens-pipeline.tfvars
+
+jobs:
+  terraform-checks:
+    name: Terraform Validate and Plan
+
+    if: github.event.pull_request.draft == false
+
+    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+
+    environment: dev
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout pull request code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Fetch Netskope certificate
+        run: |
+          aws s3 cp \
+            "s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem" \
+            /tmp/bundle.pem
+
+      - name: Configure SSL certificate trust
+        run: |
+          sudo cp \
+            /tmp/bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
+          sudo update-ca-trust
+
+          echo "NODE_EXTRA_CA_CERTS=/tmp/bundle.pem" >> "$GITHUB_ENV"
+          echo "AWS_CA_BUNDLE=/tmp/bundle.pem" >> "$GITHUB_ENV"
+
+      - name: Install Terraform
+        run: |
+          sudo yum install -y yum-utils
+
+          sudo yum-config-manager \
+            --add-repo \
+            https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+
+          sudo yum install -y terraform
+
+          terraform --version
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform initialise
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Fetch Terraform variables
+        run: |
+          aws s3 cp \
+            "s3://${{ vars.TF_VARIABLES_BUCKET_NAME }}/${{ env.TFVARS_S3_KEY }}" \
+            "./${{ env.TFVARS_FILE }}"
+
+          test -s "./${{ env.TFVARS_FILE }}"
+
+      - name: Terraform plan
+        run: |
+          terraform plan \
+            -input=false \
+            -lock=false \
+            -var-file="${{ env.TFVARS_FILE }}" \
+            -no-color
