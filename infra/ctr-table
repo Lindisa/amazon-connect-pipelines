@@ -1,3 +1,18 @@
+SELECT
+    table_name,
+    column_name,
+    data_type,
+    datetime_precision
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name IN ('ctr', 'ctr_flattened')
+  AND column_name = 'last_update_timestamp'
+ORDER BY table_name;
+
+
+
+
+
 UPDATE public.ctr_flattened AS f
 SET last_update_timestamp = c.latest_ctr_timestamp
 FROM (
