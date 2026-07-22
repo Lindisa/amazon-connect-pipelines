@@ -159,22 +159,22 @@ CREATE TABLE public.ctr_flattened
 
     agent_connection_attempts                   BIGINT,
 
-    initiation_timestamp                        TIMESTAMPTZ,
-    connected_to_system_timestamp               TIMESTAMPTZ,
-    disconnect_timestamp                        TIMESTAMPTZ,
-    scheduled_timestamp                         TIMESTAMPTZ,
-    transfer_completed_timestamp                TIMESTAMPTZ,
-    last_update_timestamp                       TIMESTAMPTZ,
+    initiation_timestamp                        TIMESTAMP,
+    connected_to_system_timestamp               TIMESTAMP,
+    disconnect_timestamp                        TIMESTAMP,
+    scheduled_timestamp                         TIMESTAMP,
+    transfer_completed_timestamp                TIMESTAMP,
+    last_update_timestamp                       TIMESTAMP,
 
     agent_arn                                   VARCHAR(65535),
     agent_active_region                         VARCHAR(65535),
     agent_username                              VARCHAR(65535),
     agent_after_contact_work_duration           BIGINT,
-    agent_after_contact_work_start_timestamp    TIMESTAMPTZ,
-    agent_after_contact_work_end_timestamp      TIMESTAMPTZ,
+    agent_after_contact_work_start_timestamp    TIMESTAMP,
+    agent_after_contact_work_end_timestamp      TIMESTAMP,
     agent_initiated_hold_duration               BIGINT,
     agent_interaction_duration                  BIGINT,
-    agent_connected_to_agent_timestamp          TIMESTAMPTZ,
+    agent_connected_to_agent_timestamp          TIMESTAMP,
     agent_customer_hold_duration                BIGINT,
     agent_longest_hold_duration                 BIGINT,
     agent_number_of_holds                       BIGINT,
@@ -197,8 +197,8 @@ CREATE TABLE public.ctr_flattened
     queue_arn                                   VARCHAR(65535),
     queue_name                                  VARCHAR(65535),
     queue_duration                              BIGINT,
-    queue_enqueue_timestamp                     TIMESTAMPTZ,
-    queue_dequeue_timestamp                     TIMESTAMPTZ,
+    queue_enqueue_timestamp                     TIMESTAMP,
+    queue_dequeue_timestamp                     TIMESTAMP,
 
     recording_deletion_reason                   VARCHAR(65535),
     recording_location                          VARCHAR(65535),
@@ -273,8 +273,8 @@ CREATE TABLE public.ctr_flattened
     segment_purpose_analytics_reference         VARCHAR(65535),
     segment_purpose_contact_search_reference    VARCHAR(65535),
 
-    last_paused_timestamp                       TIMESTAMPTZ,
-    last_resumed_timestamp                      TIMESTAMPTZ,
+    last_paused_timestamp                       TIMESTAMP,
+    last_resumed_timestamp                      TIMESTAMP,
     total_pause_count                           BIGINT,
     total_pause_duration_in_seconds             BIGINT,
 
@@ -290,7 +290,7 @@ CREATE TABLE public.ctr_flattened
     references_data                             SUPER,
 
     source_file                                 VARCHAR(65535),
-    etl_loaded_timestamp                        TIMESTAMPTZ DEFAULT GETDATE()
+    etl_loaded_timestamp                        TIMESTAMP DEFAULT GETDATE()
 )
 DISTSTYLE AUTO
 SORTKEY (contact_id, last_update_timestamp);
