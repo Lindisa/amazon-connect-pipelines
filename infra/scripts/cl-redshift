@@ -7,6 +7,7 @@ from awsglue.context import GlueContext
 from awsglue.dynamicframe import DynamicFrame
 from awsglue.job import Job
 
+from pyspark import StorageLevel
 from pyspark.context import SparkContext
 from pyspark.sql import Window
 from pyspark.sql.functions import (
@@ -31,9 +32,7 @@ from pyspark.sql.types import (
 )
 
 
-# ------------------------------------------------------------
-# Exact Redshift target and staging column order
-# ------------------------------------------------------------
+# Exact Redshift column order
 ALL_TARGET_COLUMNS = [
     "accountid",
     "categories",
@@ -55,13 +54,7 @@ ALL_TARGET_COLUMNS = [
     "day"
 ]
 
-
-# ------------------------------------------------------------
-# Columns stored as SUPER in Redshift
-#
-# The preprocess job normally converts these complex values
-# into JSON strings before writing Parquet.
-# ------------------------------------------------------------
+# Columns written to Redshift SUPER fields
 SUPER_TARGET_COLUMNS = [
     "categories",
     "contentmetadata",
@@ -72,10 +65,7 @@ SUPER_TARGET_COLUMNS = [
     "transcript"
 ]
 
-
-# ------------------------------------------------------------
-# Columns stored as VARCHAR in Redshift
-# ------------------------------------------------------------
+# Columns written to Redshift VARCHAR fields
 STRING_TARGET_COLUMNS = [
     "accountid",
     "channel",
@@ -89,31 +79,44 @@ STRING_TARGET_COLUMNS = [
     "day"
 ]
 
+# Safe fields allowed in CloudWatch samples
+SAFE_SAMPLE_COLUMNS = [
+    "accountid",
+    "channel",
+    "jobstatus",
+    "languagecode",
+    "version",
+    "source_file",
+    "contact_id",
+    "processed_at",
+    "year",
+    "month",
+    "day"
+]
 
-# ------------------------------------------------------------
-# Read an optional Glue job argument
-# ------------------------------------------------------------
+
 def get_optional_arg(arg_name, default_value):
+    """Read an optional Glue argument."""
     for index, argument in enumerate(sys.argv):
-        if (
-            argument == f"--{arg_name}"
-            and index + 1 < len(sys.argv)
-        ):
+        if argument == f"--{arg_name}" and index + 1 < len(sys.argv):
             return sys.argv[index + 1]
-
     return default_value
 
 
-# ------------------------------------------------------------
-# Build temporary S3 directory used by Redshift COPY
-# ------------------------------------------------------------
+def get_optional_bool(arg_name, default_value=False):
+    """Read an optional Boolean Glue argument."""
+    default_text = "true" if default_value else "false"
+    value = get_optional_arg(arg_name, default_text).strip().lower()
+
+    if value not in {"true", "false"}:
+        raise ValueError(f"{arg_name} must be true or false.")
+
+    return value == "true"
+
+
 def build_redshift_tmp_dir(bucket_value):
-    value = (
-        bucket_value
-        .strip()
-        .replace("s3://", "")
-        .rstrip("/")
-    )
+    """Build the temporary S3 path used by Redshift COPY."""
+    value = bucket_value.strip().replace("s3://", "").rstrip("/")
 
     if "/" in value:
         return f"s3://{value}/"
@@ -121,29 +124,16 @@ def build_redshift_tmp_dir(bucket_value):
     return f"s3://{value}/redshift_temp/"
 
 
-# ------------------------------------------------------------
-# Build a predicate containing every date in the lookback range
-#
-# lookback_days = 1:
-#   yesterday and today
-#
-# lookback_days = 3:
-#   three days ago through today
-# ------------------------------------------------------------
 def build_partition_predicate(lookback_days):
+    """Build a year/month/day predicate for recent partitions."""
     if lookback_days < 0:
-        raise ValueError(
-            "lookback_days cannot be negative."
-        )
+        raise ValueError("lookback_days cannot be negative.")
 
     today = datetime.now().date()
     conditions = []
 
     for days_ago in range(lookback_days + 1):
-        partition_date = today - timedelta(
-            days=days_ago
-        )
-
+        partition_date = today - timedelta(days=days_ago)
         conditions.append(
             "("
             f"year = '{partition_date.year}' "
@@ -155,186 +145,107 @@ def build_partition_predicate(lookback_days):
     return "(" + " OR ".join(conditions) + ")"
 
 
-# ------------------------------------------------------------
-# Lightweight operational logging helpers
-# ------------------------------------------------------------
 def log_section(title):
-    print("")
-    print("=" * 80)
-    print(title)
-    print("=" * 80)
+    print(f"\n===== {title} =====")
 
 
 def log_elapsed(stage_name, start_time):
-    elapsed_seconds = time.perf_counter() - start_time
-    print(
-        f"{stage_name} completed in "
-        f"{elapsed_seconds:.2f} seconds."
-    )
+    elapsed = time.perf_counter() - start_time
+    print(f"{stage_name} completed in {elapsed:.2f} seconds.")
 
 
-def get_optional_bool(arg_name, default_value=False):
-    default_text = "true" if default_value else "false"
-    return (
-        get_optional_arg(arg_name, default_text)
-        .strip()
-        .lower()
-        == "true"
-    )
-
-
-def log_safe_sample(spark_df, title, row_count=10):
-    safe_columns = [
-        column_name
-        for column_name in [
-            "accountid",
-            "channel",
-            "jobstatus",
-            "languagecode",
-            "version",
-            "source_file",
-            "contact_id",
-            "processed_at",
-            "year",
-            "month",
-            "day"
-        ]
-        if column_name in spark_df.columns
+def log_safe_sample(dataframe, title, row_count=10):
+    """Show only non-sensitive operational fields."""
+    selected_columns = [
+        name for name in SAFE_SAMPLE_COLUMNS
+        if name in dataframe.columns
     ]
 
     log_section(title)
 
-    if safe_columns:
-        spark_df.select(*safe_columns).show(
+    if selected_columns:
+        dataframe.select(*selected_columns).show(
             row_count,
             truncate=False
         )
     else:
-        print(
-            "No approved operational columns are available "
-            "for sample logging."
-        )
+        print("No safe sample columns are available.")
 
 
-# ------------------------------------------------------------
-# Normalise and transform source data
-# ------------------------------------------------------------
 def transform_source_dataframe(source_df):
-    spark_df = source_df
-
-
-    # --------------------------------------------------------
-    # 1. Convert top-level source column names to lowercase
-    # --------------------------------------------------------
-    original_columns = list(spark_df.columns)
-
-    lowercase_columns = [
-        column_name.lower()
-        for column_name in original_columns
-    ]
+    """Normalise source fields and prepare JSON values."""
+    original_columns = list(source_df.columns)
+    lowercase_columns = [name.lower() for name in original_columns]
 
     if len(lowercase_columns) != len(set(lowercase_columns)):
         raise ValueError(
-            "Lowercasing the source column names would create "
-            "duplicate column names."
+            "Lowercasing source columns would create duplicates."
         )
 
-    # Rename all columns in one projection instead of creating
-    # a long chain of withColumnRenamed transformations.
-    spark_df = spark_df.toDF(*lowercase_columns)
+    # Rename all top-level columns in one operation.
+    spark_df = source_df.toDF(*lowercase_columns)
 
-
-    # --------------------------------------------------------
-    # 2. Extract ContactId and InputS3Uri from CustomerMetadata
-    #
-    # CustomerMetadata should normally be a JSON string after
-    # the preprocess job, but StructType is also supported.
-    # --------------------------------------------------------
+    # Extract ContactId and InputS3Uri from CustomerMetadata.
     if "customermetadata" in spark_df.columns:
-        customer_metadata_type = (
-            spark_df.schema["customermetadata"].dataType
-        )
+        metadata_type = spark_df.schema["customermetadata"].dataType
 
-        if isinstance(customer_metadata_type, StructType):
-            spark_df = spark_df.withColumn(
-                "contact_id",
-                col("customermetadata.ContactId")
-                .cast(StringType())
-            )
-
-            spark_df = spark_df.withColumn(
-                "source_file",
-                col("customermetadata.InputS3Uri")
-                .cast(StringType())
-            )
-
-        elif isinstance(customer_metadata_type, StringType):
-            spark_df = spark_df.withColumn(
-                "contact_id",
-                get_json_object(
-                    col("customermetadata"),
-                    "$.ContactId"
+        if isinstance(metadata_type, StructType):
+            spark_df = (
+                spark_df
+                .withColumn(
+                    "contact_id",
+                    col("customermetadata.ContactId").cast(StringType())
+                )
+                .withColumn(
+                    "source_file",
+                    col("customermetadata.InputS3Uri").cast(StringType())
                 )
             )
 
-            spark_df = spark_df.withColumn(
-                "source_file",
-                get_json_object(
-                    col("customermetadata"),
-                    "$.InputS3Uri"
+        elif isinstance(metadata_type, StringType):
+            spark_df = (
+                spark_df
+                .withColumn(
+                    "contact_id",
+                    get_json_object(
+                        col("customermetadata"),
+                        "$.ContactId"
+                    )
+                )
+                .withColumn(
+                    "source_file",
+                    get_json_object(
+                        col("customermetadata"),
+                        "$.InputS3Uri"
+                    )
                 )
             )
 
         else:
             print(
-                "WARNING: customermetadata has an unsupported "
-                f"source type: {customer_metadata_type}"
+                "WARNING: customermetadata has unsupported type: "
+                f"{metadata_type}."
             )
-
-            spark_df = spark_df.withColumn(
-                "contact_id",
-                lit(None).cast(StringType())
-            )
-
-            spark_df = spark_df.withColumn(
-                "source_file",
-                lit(None).cast(StringType())
+            spark_df = (
+                spark_df
+                .withColumn("contact_id", lit(None).cast(StringType()))
+                .withColumn("source_file", lit(None).cast(StringType()))
             )
 
     else:
-        print(
-            "WARNING: customermetadata is missing from the source."
+        print("WARNING: customermetadata is missing from the source.")
+        spark_df = (
+            spark_df
+            .withColumn("contact_id", lit(None).cast(StringType()))
+            .withColumn("source_file", lit(None).cast(StringType()))
         )
 
-        spark_df = spark_df.withColumn(
-            "contact_id",
-            lit(None).cast(StringType())
-        )
-
-        spark_df = spark_df.withColumn(
-            "source_file",
-            lit(None).cast(StringType())
-        )
-
-
-    # --------------------------------------------------------
-    # 3. Add the ETL processing timestamp
-    # --------------------------------------------------------
     spark_df = spark_df.withColumn(
         "processed_at",
         current_timestamp()
     )
 
-
-    # --------------------------------------------------------
-    # 4. Ensure complex fields are JSON strings
-    #
-    # The preprocess job normally already performs this.
-    # Structs, arrays and maps are handled again only as a
-    # defensive fallback.
-    #
-    # Missing values remain genuine SQL NULL.
-    # --------------------------------------------------------
+    # Ensure SUPER values are JSON strings or SQL NULL.
     schema_types = {
         field.name: field.dataType
         for field in spark_df.schema.fields
@@ -352,18 +263,13 @@ def transform_source_dataframe(source_df):
                 lit(None).cast(StringType())
             )
 
-        elif isinstance(
-            column_type,
-            (StructType, ArrayType, MapType)
-        ):
+        elif isinstance(column_type, (StructType, ArrayType, MapType)):
             spark_df = spark_df.withColumn(
                 column_name,
                 when(
                     col(column_name).isNull(),
                     lit(None).cast(StringType())
-                ).otherwise(
-                    to_json(col(column_name))
-                )
+                ).otherwise(to_json(col(column_name)))
             )
 
         elif isinstance(column_type, StringType):
@@ -373,17 +279,14 @@ def transform_source_dataframe(source_df):
                     col(column_name).isNull()
                     | (trim(col(column_name)) == ""),
                     lit(None).cast(StringType())
-                ).otherwise(
-                    col(column_name).cast(StringType())
-                )
+                ).otherwise(col(column_name).cast(StringType()))
             )
 
         else:
             print(
                 f"WARNING: {column_name} has unsupported type "
-                f"{column_type}. Its value will be stored as NULL."
+                f"{column_type}. Storing it as NULL."
             )
-
             spark_df = spark_df.withColumn(
                 column_name,
                 lit(None).cast(StringType())
@@ -392,16 +295,10 @@ def transform_source_dataframe(source_df):
     return spark_df
 
 
-# ------------------------------------------------------------
-# Add missing columns and enforce required Spark data types
-# ------------------------------------------------------------
 def align_target_schema(spark_df):
+    """Add missing columns and enforce Redshift-compatible types."""
     existing_columns = set(spark_df.columns)
 
-
-    # --------------------------------------------------------
-    # 5. Add target columns missing from the source
-    # --------------------------------------------------------
     for column_name in ALL_TARGET_COLUMNS:
         if column_name in existing_columns:
             continue
@@ -411,92 +308,56 @@ def align_target_schema(spark_df):
                 column_name,
                 current_timestamp()
             )
-
         else:
             spark_df = spark_df.withColumn(
                 column_name,
                 lit(None).cast(StringType())
             )
 
-
-    # --------------------------------------------------------
-    # 6. Ensure SUPER input columns are JSON strings
-    # --------------------------------------------------------
     for column_name in SUPER_TARGET_COLUMNS:
         spark_df = spark_df.withColumn(
             column_name,
             col(column_name).cast(StringType())
         )
 
-
-    # --------------------------------------------------------
-    # 7. Ensure Redshift VARCHAR fields are Spark strings
-    # --------------------------------------------------------
     for column_name in STRING_TARGET_COLUMNS:
         spark_df = spark_df.withColumn(
             column_name,
             col(column_name).cast(StringType())
         )
 
-
-    # --------------------------------------------------------
-    # 8. Ensure processed_at is a timestamp
-    # --------------------------------------------------------
     spark_df = spark_df.withColumn(
         "processed_at",
         col("processed_at").cast(TimestampType())
     )
 
-
-    # --------------------------------------------------------
-    # 9. Clean ContactId once
-    #
-    # NULL, empty and whitespace-only values become SQL NULL.
-    # --------------------------------------------------------
+    # Convert blank ContactIds to SQL NULL.
     spark_df = spark_df.withColumn(
         "contact_id",
         when(
             col("contact_id").isNull()
             | (trim(col("contact_id")) == ""),
             lit(None).cast(StringType())
-        ).otherwise(
-            trim(col("contact_id"))
-        )
+        ).otherwise(trim(col("contact_id")))
     )
 
     return spark_df
 
 
-# ------------------------------------------------------------
-# Deterministically keep one row per ContactId in this run
-# ------------------------------------------------------------
 def remove_duplicate_contact_ids(valid_df):
-    # A stable row hash is used as the final tie-breaker.
+    """Deterministically keep one row per ContactId in this batch."""
     valid_df = valid_df.withColumn(
         "__row_hash",
         sha2(
             to_json(
                 struct(
-                    *[
-                        col(column_name)
-                        for column_name in ALL_TARGET_COLUMNS
-                    ]
+                    *[col(name) for name in ALL_TARGET_COLUMNS]
                 )
             ),
             256
         )
     )
 
-
-    # --------------------------------------------------------
-    # Duplicate preference:
-    #
-    # 1. Latest year
-    # 2. Latest month
-    # 3. Latest day
-    # 4. Highest source_file
-    # 5. Stable row hash
-    # --------------------------------------------------------
     duplicate_window = (
         Window
         .partitionBy("contact_id")
@@ -515,28 +376,14 @@ def remove_duplicate_contact_ids(valid_df):
             "__duplicate_row_number",
             row_number().over(duplicate_window)
         )
-        .filter(
-            col("__duplicate_row_number") == 1
-        )
-        .drop(
-            "__duplicate_row_number",
-            "__row_hash"
-        )
+        .filter(col("__duplicate_row_number") == 1)
+        .drop("__duplicate_row_number", "__row_hash")
     )
 
 
-# ------------------------------------------------------------
-# Main Glue job
-#
-# Using return rather than sys.exit prevents successful no-data
-# runs from being reported by Glue as SYSTEM_EXIT_ERROR.
-# ------------------------------------------------------------
 def main():
     total_job_start = time.perf_counter()
 
-    # --------------------------------------------------------
-    # Read required job parameters
-    # --------------------------------------------------------
     args = getResolvedOptions(
         sys.argv,
         [
@@ -550,260 +397,184 @@ def main():
         ]
     )
 
-
-    # --------------------------------------------------------
-    # Initialise Glue and Spark
-    # --------------------------------------------------------
     spark_context = SparkContext()
     glue_context = GlueContext(spark_context)
     job = Job(glue_context)
     job.init(args["JOB_NAME"], args)
 
-
-    # --------------------------------------------------------
-    # Job configuration
-    # --------------------------------------------------------
     target_table = args["target_table"]
     staging_table = "public.contact_lens_staging_temp"
-
     redshift_tmp_dir = build_redshift_tmp_dir(
         args["job_store_bucket_name"]
     )
 
     try:
         lookback_days = int(
-            get_optional_arg(
-                "lookback_days",
-                "1"
-            )
+            get_optional_arg("lookback_days", "1")
         )
     except ValueError as error:
         raise ValueError(
             "lookback_days must be a valid integer."
         ) from error
 
-    initial_load = get_optional_bool(
-        "initial_load",
-        False
-    )
-
-    # Expensive logging is disabled by default for production.
-    # Enable only when troubleshooting or validating a load.
-    enable_detailed_metrics = get_optional_bool(
+    initial_load = get_optional_bool("initial_load", False)
+    detailed_metrics = get_optional_bool(
         "enable_detailed_metrics",
         False
     )
-
-    enable_sample_logging = get_optional_bool(
+    sample_logging = get_optional_bool(
         "enable_sample_logging",
         False
     )
 
     log_section("CONTACT LENS REDSHIFT ETL STARTED")
     print(f"Job name: {args['JOB_NAME']}")
-    print(f"Source database: {args['source_database']}")
-    print(f"Source table: {args['source_table']}")
+    print(f"Source: {args['source_database']}.{args['source_table']}")
     print(f"Target table: {target_table}")
     print(f"Staging table: {staging_table}")
     print(f"Initial load: {initial_load}")
     print(f"Lookback days: {lookback_days}")
-    print(f"Detailed metrics enabled: {enable_detailed_metrics}")
-    print(f"Sample logging enabled: {enable_sample_logging}")
+    print(f"Detailed metrics: {detailed_metrics}")
+    print(f"Sample logging: {sample_logging}")
 
-
-    # --------------------------------------------------------
-    # Read Contact Lens data from the Glue Catalog
-    # --------------------------------------------------------
-    source_read_start = time.perf_counter()
+    # Read only recent partitions during scheduled runs.
+    catalog_read_start = time.perf_counter()
 
     if initial_load:
-        print("Performing full Contact Lens Redshift load.")
-
-        source_dyf = (
-            glue_context
-            .create_dynamic_frame
-            .from_catalog(
-                database=args["source_database"],
-                table_name=args["source_table"],
-                transformation_ctx="source_dyf"
-            )
+        print("Performing full Contact Lens load.")
+        source_dyf = glue_context.create_dynamic_frame.from_catalog(
+            database=args["source_database"],
+            table_name=args["source_table"],
+            transformation_ctx="source_dyf"
         )
-
     else:
         predicate = build_partition_predicate(lookback_days)
-
-        print("Performing incremental Contact Lens Redshift load.")
+        print("Performing incremental Contact Lens load.")
         print(f"Predicate: {predicate}")
 
-        source_dyf = (
-            glue_context
-            .create_dynamic_frame
-            .from_catalog(
-                database=args["source_database"],
-                table_name=args["source_table"],
-                push_down_predicate=predicate,
-                transformation_ctx="source_dyf"
-            )
+        source_dyf = glue_context.create_dynamic_frame.from_catalog(
+            database=args["source_database"],
+            table_name=args["source_table"],
+            push_down_predicate=predicate,
+            transformation_ctx="source_dyf"
         )
 
     source_df = source_dyf.toDF()
+    log_elapsed("Glue Catalog read setup", catalog_read_start)
 
-    log_elapsed(
-        "Glue Catalog source setup",
-        source_read_start
-    )
-
-    log_section("RAW SOURCE DATAFRAME SCHEMA")
+    log_section("SOURCE DATAFRAME SCHEMA")
     source_df.printSchema()
 
-    # isEmpty() checks for data without performing a full count.
+    # isEmpty avoids a full source count in normal production runs.
     if source_df.isEmpty():
         print(
-            "No source records were found for the selected "
-            "partitions. Redshift will not be updated."
+            "No source records were found for the selected partitions. "
+            "Redshift will not be updated."
         )
         job.commit()
-        log_elapsed(
-            "Total Contact Lens Redshift ETL job",
-            total_job_start
-        )
-        print(
-            "Contact Lens Redshift ETL completed successfully "
-            "with no source records."
-        )
+        log_elapsed("Total ETL job", total_job_start)
         return
 
-    if enable_sample_logging:
-        log_safe_sample(
-            source_df,
-            "RAW SOURCE OPERATIONAL SAMPLE"
-        )
-
-    if enable_detailed_metrics:
-        metrics_start = time.perf_counter()
+    if detailed_metrics:
+        metric_start = time.perf_counter()
         source_record_count = source_df.count()
-        print(
-            "Source records read from Glue Catalog: "
-            f"{source_record_count}"
-        )
-        log_elapsed(
-            "Source record count",
-            metrics_start
-        )
+        print(f"Source records read: {source_record_count}")
+        log_elapsed("Source count", metric_start)
 
+    transformation_start = time.perf_counter()
 
-    # --------------------------------------------------------
-    # Transform, align and filter source data
-    # --------------------------------------------------------
-    transform_start = time.perf_counter()
-
-    transformed_df = transform_source_dataframe(source_df)
-    prepared_df = align_target_schema(transformed_df)
-
-    valid_before_dedup_df = prepared_df.filter(
-        col("contact_id").isNotNull()
+    prepared_df = align_target_schema(
+        transform_source_dataframe(source_df)
     )
 
-    valid_df = remove_duplicate_contact_ids(
-        valid_before_dedup_df
-    ).select(*ALL_TARGET_COLUMNS)
+    log_section("PREPARED DATAFRAME SCHEMA")
+    prepared_df.printSchema()
 
-    log_elapsed(
-        "Transformation plan construction",
-        transform_start
+    if detailed_metrics:
+        valid_before_dedup_df = (
+            prepared_df
+            .filter(col("contact_id").isNotNull())
+            .persist(StorageLevel.MEMORY_AND_DISK)
+        )
+
+        valid_before_dedup_count = valid_before_dedup_df.count()
+        missing_contact_id_count = (
+            prepared_df
+            .filter(col("contact_id").isNull())
+            .count()
+        )
+
+        print(
+            "Records removed because contact_id was missing or blank: "
+            f"{missing_contact_id_count}"
+        )
+        print(
+            "Valid records before deduplication: "
+            f"{valid_before_dedup_count}"
+        )
+
+        dedup_source_df = valid_before_dedup_df
+    else:
+        valid_before_dedup_df = None
+        dedup_source_df = prepared_df.filter(
+            col("contact_id").isNotNull()
+        )
+
+    # Persist only the final expensive result.
+    valid_df = (
+        remove_duplicate_contact_ids(dedup_source_df)
+        .select(*ALL_TARGET_COLUMNS)
+        .persist(StorageLevel.MEMORY_AND_DISK)
     )
 
-    log_section("FINAL REDSHIFT LOAD SCHEMA")
-    valid_df.printSchema()
+    valid_record_count = valid_df.count()
 
-    # Check whether any valid row remains without counting the
-    # complete DataFrame or caching wide transcript records.
-    if valid_df.isEmpty():
-        print(
-            "No valid records remain after ContactId validation "
-            "and deduplication. Redshift will not be updated."
-        )
-        job.commit()
-        log_elapsed(
-            "Total Contact Lens Redshift ETL job",
-            total_job_start
-        )
-        print(
-            "Contact Lens Redshift ETL completed successfully "
-            "with no valid records."
-        )
-        return
-
-    if enable_detailed_metrics:
-        metrics_start = time.perf_counter()
-
-        # Use one aggregate action for prepared-data metrics.
-        prepared_counts = prepared_df.selectExpr(
-            "count(*) AS prepared_count",
-            "sum(CASE WHEN contact_id IS NULL THEN 1 ELSE 0 END) "
-            "AS missing_contact_id_count"
-        ).collect()[0]
-
-        valid_record_count = valid_df.count()
-
-        prepared_count = int(prepared_counts["prepared_count"] or 0)
-        missing_contact_id_count = int(
-            prepared_counts["missing_contact_id_count"] or 0
-        )
-        valid_before_dedup_count = (
-            prepared_count - missing_contact_id_count
-        )
+    if detailed_metrics:
         duplicate_count = (
             valid_before_dedup_count - valid_record_count
         )
+        print(f"Duplicate records removed: {duplicate_count}")
 
-        print(f"Prepared records: {prepared_count}")
-        print(
-            "Records removed because contact_id was missing "
-            f"or blank: {missing_contact_id_count}"
-        )
-        print(
-            "Duplicate ContactId records removed from this batch: "
-            f"{duplicate_count}"
-        )
-        print(
-            "Valid deduplicated records to load into staging: "
-            f"{valid_record_count}"
-        )
+    print(
+        "Valid deduplicated records to load into staging: "
+        f"{valid_record_count}"
+    )
 
-        log_elapsed(
-            "Detailed record metrics",
-            metrics_start
-        )
+    log_elapsed("Transformation and deduplication", transformation_start)
 
-    if enable_sample_logging:
+    if valid_before_dedup_df is not None:
+        valid_before_dedup_df.unpersist()
+
+    if valid_record_count == 0:
+        valid_df.unpersist()
+        print(
+            "No valid records remain after ContactId validation. "
+            "Redshift will not be updated."
+        )
+        job.commit()
+        log_elapsed("Total ETL job", total_job_start)
+        return
+
+    log_section("FINAL REDSHIFT DATAFRAME SCHEMA")
+    valid_df.printSchema()
+
+    if sample_logging:
         log_safe_sample(
             valid_df,
-            "FINAL REDSHIFT LOAD OPERATIONAL SAMPLE"
+            "SAFE SAMPLE BEFORE REDSHIFT WRITE"
         )
 
-
-    # --------------------------------------------------------
-    # Convert final DataFrame back to DynamicFrame
-    # --------------------------------------------------------
     final_dyf = DynamicFrame.fromDF(
         valid_df,
         glue_context,
         "final_redshift_frame"
     )
 
-
-    # --------------------------------------------------------
-    # Clear only the staging table before the batch load
-    # --------------------------------------------------------
+    # Clear only staging, then insert new ContactIds into target.
     preactions = f"""
     TRUNCATE TABLE {staging_table};
     """
 
-
-    # --------------------------------------------------------
-    # Insert only ContactIds not already present in the target
-    # --------------------------------------------------------
     postactions = f"""
     BEGIN;
 
@@ -857,55 +628,39 @@ def main():
     COMMIT;
     """
 
-
-    # --------------------------------------------------------
-    # Write current batch to Redshift staging
-    # --------------------------------------------------------
-    log_section("REDSHIFT STAGING LOAD STARTED")
-    print(f"Staging table: {staging_table}")
-    print(f"Target table: {target_table}")
+    log_section("REDSHIFT LOAD STARTED")
+    print(f"Records being sent to staging: {valid_record_count}")
 
     redshift_write_start = time.perf_counter()
 
-    glue_context.write_dynamic_frame.from_options(
-        frame=final_dyf,
-        connection_type="redshift",
-        connection_options={
-            "redshiftTmpDir": redshift_tmp_dir,
-            "aws_iam_role": args["redshift_s3_role_arn"],
-            "useConnectionProperties": "true",
-            "connectionName": args["target_connection_name"],
-            "dbtable": staging_table,
-            "preactions": preactions,
-            "postactions": postactions,
-            "extracopyoptions": "ACCEPTINVCHARS"
-        },
-        transformation_ctx="AmazonRedshiftTarget"
-    )
+    try:
+        glue_context.write_dynamic_frame.from_options(
+            frame=final_dyf,
+            connection_type="redshift",
+            connection_options={
+                "redshiftTmpDir": redshift_tmp_dir,
+                "aws_iam_role": args["redshift_s3_role_arn"],
+                "useConnectionProperties": "true",
+                "connectionName": args["target_connection_name"],
+                "dbtable": staging_table,
+                "preactions": preactions,
+                "postactions": postactions,
+                "extracopyoptions": "ACCEPTINVCHARS"
+            },
+            transformation_ctx="AmazonRedshiftTarget"
+        )
+    finally:
+        valid_df.unpersist()
 
     log_elapsed(
         "Redshift staging load and target insert",
         redshift_write_start
     )
 
-
-    # --------------------------------------------------------
-    # Complete Glue job
-    # --------------------------------------------------------
     job.commit()
-
-    log_elapsed(
-        "Total Contact Lens Redshift ETL job",
-        total_job_start
-    )
-
-    log_section(
-        "CONTACT LENS REDSHIFT ETL COMPLETED SUCCESSFULLY"
-    )
+    log_elapsed("Total ETL job", total_job_start)
+    log_section("CONTACT LENS REDSHIFT ETL COMPLETED")
 
 
-# ------------------------------------------------------------
-# Run the Glue job
-# ------------------------------------------------------------
 if __name__ == "__main__":
     main()
