@@ -17,7 +17,7 @@ from pyspark.sql.functions import (
 )
 from pyspark.sql.types import StructType, ArrayType, MapType
 from datetime import datetime, timedelta
-from zoneinfo import zoneinfo
+from zoneinfo import ZoneInfo
 
 
 # ------------------------------------------------------------
@@ -46,18 +46,18 @@ now = datetime.now(ZoneInfo("Africa/Johannesburg"))
 # Today + previous 3 days
 
 for i in range(4):
-     d = now - timezone(days=i)
+     d = now - timedelta(days=i)
 
      source_paths.append(
           f"s3://{args['source_bucket_name']}/"
           f"{source_prefix}/"
-          f"(d.strftime('%Y')}/"
-          f"(d.strftime('%m')}/"
-          f"(d.strftime('%d')}/"
+          f"{d.strftime('%Y')}/"
+          f"{d.strftime('%m')}/"
+          f"{d.strftime('%d')}/"
      )
 
 # source_ path = f"s3://{args['source_bucket_name']}/{source_prefix}/{current_year}/{current_month}/"
-target_path    = f"s3://{args['source_bucket_name']}/{target_prefix}/
+target_path = f"s3://{args['target_bucket_name']}/{target_prefix}/"
 
 # ------------------------------------------------------------
 # Initialise Glue and Spark context
@@ -88,7 +88,7 @@ AmazonS3Datasource = glueContext.create_dynamic_frame.from_options(
         "multiline": False
     },
     connection_options={
-        "paths": [source_path],
+        "paths": source_paths,
         "recurse": True,
         "groupFiles": "none",
         "exclusions": json.dumps([
