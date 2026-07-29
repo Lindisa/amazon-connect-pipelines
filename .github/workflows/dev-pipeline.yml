@@ -1,6 +1,6 @@
 name: Dev Terraform CD Pipeline
 
-# Deploy Contact Lens infrastructure to dev
+# Deploy Contact Evaluations infrastructure to dev
 on:
   push:
     branches:
@@ -22,12 +22,12 @@ env:
   TF_WORKING_DIR: infra/env/dev
 
   # Terraform variables downloaded from S3
-  TFVARS_FILE: contact-lens-pipeline.tfvars
-  TFVARS_S3_KEY: terraform/dev/af-south-1/contact-lens-pipeline.tfvars
+  TFVARS_FILE: contact-evaluations-pipeline.tfvars
+  TFVARS_S3_KEY: terraform/dev/af-south-1/contact-evaluations-pipeline.tfvars
 
   # Terraform plan passed between the plan and apply jobs
   PLAN_FILE: tfplan
-  PLAN_S3_KEY: artifacts/dev/contact-lens-pipeline/${{ github.run_id }}/tfplan
+  PLAN_S3_KEY: artifacts/dev/contact-evaluations-pipeline/${{ github.run_id }}/tfplan
 
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
   validate:
     name: Validate Terraform
 
-    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
 
     environment: dev
     timeout-minutes: 30
@@ -53,12 +53,15 @@ jobs:
       - name: Fetch Netskope certificate
         run: |
           aws s3 cp \
-            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            "s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem" \
             ./bundle.pem
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
@@ -95,7 +98,7 @@ jobs:
     needs:
       - validate
 
-    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
 
     environment: dev
     timeout-minutes: 30
@@ -111,12 +114,15 @@ jobs:
       - name: Fetch Netskope certificate
         run: |
           aws s3 cp \
-            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            "s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem" \
             ./bundle.pem
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
@@ -137,8 +143,8 @@ jobs:
       - name: Fetch Terraform variables
         run: |
           aws s3 cp \
-            s3://${{ vars.TF_VARIABLES_BUCKET_NAME }}/${{ env.TFVARS_S3_KEY }} \
-            ./${{ env.TFVARS_FILE }}
+            "s3://${{ vars.TF_VARIABLES_BUCKET_NAME }}/${{ env.TFVARS_S3_KEY }}" \
+            "./${{ env.TFVARS_FILE }}"
 
           test -s "./${{ env.TFVARS_FILE }}"
 
@@ -172,7 +178,7 @@ jobs:
     needs:
       - plan
 
-    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
 
     environment: dev
     timeout-minutes: 30
@@ -188,12 +194,15 @@ jobs:
       - name: Fetch Netskope certificate
         run: |
           aws s3 cp \
-            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            "s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem" \
             ./bundle.pem
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
