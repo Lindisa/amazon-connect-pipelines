@@ -24,8 +24,8 @@ concurrency:
 env:
   TF_IN_AUTOMATION: true
   TF_WORKING_DIR: infra/env/dev
-  TFVARS_FILE: contact-lens-pipeline.tfvars
-  TFVARS_S3_KEY: terraform/dev/af-south-1/contact-lens-pipeline.tfvars
+  TFVARS_FILE: contact-evaluations-pipeline.tfvars
+  TFVARS_S3_KEY: terraform/dev/af-south-1/contact-evaluations-pipeline.tfvars
 
 jobs:
   terraform-checks:
@@ -33,7 +33,7 @@ jobs:
 
     if: github.event.pull_request.draft == false
 
-    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
 
     environment: dev
     timeout-minutes: 30
