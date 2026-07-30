@@ -20,16 +20,18 @@ env:
   TF_IN_AUTOMATION: true
   TF_WORKING_DIR: infra/env/sit
 
-  TFVARS_FILE: contact-lens-pipeline.tfvars
-  TFVARS_S3_KEY: terraform/sit/af-south-1/contact-lens-pipeline.tfvars
+  TFVARS_FILE: contact-evaluations-pipeline.tfvars
+  TFVARS_S3_KEY: terraform/sit/af-south-1/contact-evaluations-pipeline.tfvars
 
   PLAN_FILE: tfplan
-  PLAN_S3_KEY: artifacts/sit/contact-lens-pipeline/${{ github.run_id }}/tfplan
+  PLAN_S3_KEY: artifacts/sit/contact-evaluations-pipeline/${{ github.run_id }}/tfplan
 
 jobs:
   validate:
     name: Validate Terraform
-    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+
+    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+
     environment: sit
     timeout-minutes: 30
 
@@ -44,23 +46,27 @@ jobs:
       - name: Fetch Netskope certificate
         run: |
           aws s3 cp \
-            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            "s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem" \
             ./bundle.pem
 
       - name: Configure SSL certificate
         run: |
           sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
           sudo update-ca-trust
+
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
           echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
 
       - name: Install Terraform
         run: |
           sudo yum install -y yum-utils
+
           sudo yum-config-manager \
             --add-repo \
             https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+
           sudo yum install -y terraform
+
           terraform --version
 
       - name: Terraform Format Check
@@ -74,10 +80,12 @@ jobs:
 
   plan:
     name: Terraform Plan
+
     needs:
       - validate
 
-    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+
     environment: sit
     timeout-minutes: 30
 
@@ -92,30 +100,34 @@ jobs:
       - name: Fetch Netskope certificate
         run: |
           aws s3 cp \
-            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            "s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem" \
             ./bundle.pem
 
       - name: Configure SSL certificate
         run: |
           sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
           sudo update-ca-trust
+
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
           echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
 
       - name: Install Terraform
         run: |
           sudo yum install -y yum-utils
+
           sudo yum-config-manager \
             --add-repo \
             https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+
           sudo yum install -y terraform
+
           terraform --version
 
       - name: Fetch Terraform variables
         run: |
           aws s3 cp \
-            s3://${{ vars.TF_VARIABLES_BUCKET_NAME }}/${{ env.TFVARS_S3_KEY }} \
-            ./${{ env.TFVARS_FILE }}
+            "s3://${{ vars.TF_VARIABLES_BUCKET_NAME }}/${{ env.TFVARS_S3_KEY }}" \
+            "./${{ env.TFVARS_FILE }}"
 
           test -s "./${{ env.TFVARS_FILE }}"
 
@@ -137,10 +149,12 @@ jobs:
 
   apply:
     name: Terraform Apply
+
     needs:
       - plan
 
-    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-lens-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+
     environment: sit
     timeout-minutes: 30
 
@@ -155,23 +169,27 @@ jobs:
       - name: Fetch Netskope certificate
         run: |
           aws s3 cp \
-            s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem \
+            "s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem" \
             ./bundle.pem
 
       - name: Configure SSL certificate
         run: |
           sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
           sudo update-ca-trust
+
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
           echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
 
       - name: Install Terraform
         run: |
           sudo yum install -y yum-utils
+
           sudo yum-config-manager \
             --add-repo \
             https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+
           sudo yum install -y terraform
+
           terraform --version
 
       - name: Terraform Init
