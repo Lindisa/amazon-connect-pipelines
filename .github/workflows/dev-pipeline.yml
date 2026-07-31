@@ -29,6 +29,9 @@ env:
   PLAN_FILE: tfplan
   PLAN_S3_KEY: artifacts/dev/contact-evaluations-pipeline/${{ github.run_id }}/tfplan
 
+  # Existing shared Glue network connection resource address
+  NETWORK_CONNECTION_RESOURCE_ADDRESS: module.compute.aws_glue_connection.network_connection
+
 
 jobs:
   # ----------------------------------------------------------
@@ -90,10 +93,11 @@ jobs:
 
 
   # ----------------------------------------------------------
-  # Create and store Terraform plan
+  # Import existing shared network connection,
+  # create and store Terraform plan
   # ----------------------------------------------------------
   plan:
-    name: Terraform Plan
+    name: Import Connection and Terraform Plan
 
     needs:
       - validate
@@ -152,6 +156,48 @@ jobs:
 
       - name: Terraform Init
         run: terraform init -input=false
+
+      # --------------------------------------------------------
+      # Import the existing shared Glue network connection only
+      # when it is not already present in this Terraform state.
+      # --------------------------------------------------------
+      - name: Import existing shared Glue network connection
+        env:
+          NETWORK_CONNECTION_IMPORT_ID: ${{ vars.NETWORK_GLUE_CONNECTION_IMPORT_ID }}
+        run: |
+          if [ -z "${NETWORK_CONNECTION_IMPORT_ID}" ]; then
+            echo "NETWORK_GLUE_CONNECTION_IMPORT_ID is not configured."
+            exit 1
+          fi
+
+          echo "Checking whether the shared Glue network connection is already in Terraform state..."
+
+          if terraform state show \
+            "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}" \
+            >/dev/null 2>&1; then
+
+            echo "Shared Glue network connection is already present in Terraform state."
+          else
+            echo "Importing existing shared Glue network connection..."
+
+            terraform import \
+              -input=false \
+              -var-file="${{ env.TFVARS_FILE }}" \
+              "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}" \
+              "${NETWORK_CONNECTION_IMPORT_ID}"
+
+            echo "Shared Glue network connection imported successfully."
+          fi
+
+      - name: Wait before creating Glue job plan
+        run: |
+          echo "Waiting 60 seconds before planning the Glue jobs..."
+          sleep 60
+
+      - name: Verify imported network connection
+        run: |
+          terraform state show \
+            "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}"
 
       - name: Terraform Plan
         run: |
