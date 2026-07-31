@@ -26,6 +26,9 @@ env:
   PLAN_FILE: tfplan
   PLAN_S3_KEY: artifacts/sit/contact-evaluations-pipeline/${{ github.run_id }}/tfplan
 
+  NETWORK_CONNECTION_NAME: npsenvoicesit-sit-afs1-contact-lens-network-connection
+  NETWORK_CONNECTION_RESOURCE: module.compute.aws_glue_connection.network_connection
+
 jobs:
   validate:
     name: Validate Terraform
@@ -78,8 +81,8 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
-  plan:
-    name: Terraform Plan
+  import-network-connection:
+    name: Import Shared Network Connection
 
     needs:
       - validate
@@ -133,6 +136,99 @@ jobs:
 
       - name: Terraform Init
         run: terraform init -input=false
+
+      - name: Import shared Glue network connection
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          IMPORT_ID="${ACCOUNT_ID}:${{ env.NETWORK_CONNECTION_NAME }}"
+
+          echo "Terraform resource: ${{ env.NETWORK_CONNECTION_RESOURCE }}"
+          echo "Glue connection: ${{ env.NETWORK_CONNECTION_NAME }}"
+
+          if terraform state show \
+            "${{ env.NETWORK_CONNECTION_RESOURCE }}" >/dev/null 2>&1; then
+
+            echo "Shared Glue connection is already present in Terraform state."
+          else
+            echo "Importing shared Glue connection into Terraform state."
+
+            terraform import \
+              -input=false \
+              -var-file="${{ env.TFVARS_FILE }}" \
+              "${{ env.NETWORK_CONNECTION_RESOURCE }}" \
+              "${IMPORT_ID}"
+          fi
+
+      - name: Verify imported connection
+        run: |
+          terraform state show \
+            "${{ env.NETWORK_CONNECTION_RESOURCE }}"
+
+      - name: Wait before creating Glue jobs
+        run: |
+          echo "Waiting 60 seconds before Terraform creates the Glue jobs."
+          sleep 60
+
+  plan:
+    name: Terraform Plan
+
+    needs:
+      - import-network-connection
+
+    runs-on: codebuild-npsenvoicesit-sit-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+
+    environment: sit
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch Netskope certificate
+        run: |
+          aws s3 cp \
+            "s3://${{ vars.CERTIFICATE_S3_BUCKET_NAME }}/bundle.pem" \
+            ./bundle.pem
+
+      - name: Configure SSL certificate
+        run: |
+          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo update-ca-trust
+
+          echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+          echo "AWS_CA_BUNDLE=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
+
+      - name: Install Terraform
+        run: |
+          sudo yum install -y yum-utils
+
+          sudo yum-config-manager \
+            --add-repo \
+            https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+
+          sudo yum install -y terraform
+
+          terraform --version
+
+      - name: Fetch Terraform variables
+        run: |
+          aws s3 cp \
+            "s3://${{ vars.TF_VARIABLES_BUCKET_NAME }}/${{ env.TFVARS_S3_KEY }}" \
+            "./${{ env.TFVARS_FILE }}"
+
+          test -s "./${{ env.TFVARS_FILE }}"
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Confirm shared network connection is in state
+        run: |
+          terraform state show \
+            "${{ env.NETWORK_CONNECTION_RESOURCE }}"
 
       - name: Terraform Plan
         run: |
