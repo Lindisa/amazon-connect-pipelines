@@ -20,6 +20,7 @@ from pyspark.sql.functions import (
     trim,
     row_number,
     to_timestamp,
+    coalesce,
     count,
     sum as spark_sum,
 )
@@ -208,14 +209,41 @@ def get_metadata_value(
 
 
 # ------------------------------------------------------------
-# Extract metadata.score.percentage
+# Extract metadata.score.percentage.
+#
+# Glue can infer mixed integer and decimal percentages as a
+# choice-type struct, for example:
+#   {"percentage": {"int": 40}}
+#   {"percentage": {"double": 86.5}}
 # ------------------------------------------------------------
 def get_score_percentage(metadata_type):
     if isinstance(metadata_type, StringType):
-        return get_json_object(
-            col("metadata"),
-            "$.score.percentage",
-        ).cast(DoubleType())
+        return coalesce(
+            get_json_object(
+                col("metadata"),
+                "$.score.percentage.double",
+            ).cast(DoubleType()),
+            get_json_object(
+                col("metadata"),
+                "$.score.percentage.int",
+            ).cast(DoubleType()),
+            get_json_object(
+                col("metadata"),
+                "$.score.percentage.long",
+            ).cast(DoubleType()),
+            get_json_object(
+                col("metadata"),
+                "$.score.percentage.float",
+            ).cast(DoubleType()),
+            get_json_object(
+                col("metadata"),
+                "$.score.percentage.decimal",
+            ).cast(DoubleType()),
+            get_json_object(
+                col("metadata"),
+                "$.score.percentage",
+            ).cast(DoubleType()),
+        )
 
     if isinstance(metadata_type, StructType):
         metadata_fields = {
@@ -229,11 +257,41 @@ def get_score_percentage(metadata_type):
             return lit(None).cast(DoubleType())
 
         score_fields = {
-            field.name
+            field.name: field.dataType
             for field in score_type.fields
         }
 
         if "percentage" not in score_fields:
+            return lit(None).cast(DoubleType())
+
+        percentage_type = score_fields["percentage"]
+
+        if isinstance(percentage_type, StructType):
+            percentage_fields = {
+                field.name
+                for field in percentage_type.fields
+            }
+
+            possible_values = []
+
+            for value_type in [
+                "double",
+                "int",
+                "long",
+                "float",
+                "decimal",
+            ]:
+                if value_type in percentage_fields:
+                    possible_values.append(
+                        col(
+                            "metadata.score.percentage."
+                            f"{value_type}"
+                        ).cast(DoubleType())
+                    )
+
+            if possible_values:
+                return coalesce(*possible_values)
+
             return lit(None).cast(DoubleType())
 
         return col(
@@ -1024,6 +1082,56 @@ def main():
 
     postactions = f"""
     BEGIN;
+
+    UPDATE {target_table} AS t
+    SET
+        schema_version = s.schema_version,
+        contact_id = s.contact_id,
+        account_id = s.account_id,
+        instance_id = s.instance_id,
+        agent_id = s.agent_id,
+        evaluation_definition_title =
+            s.evaluation_definition_title,
+        evaluator = s.evaluator,
+        evaluation_definition_id =
+            s.evaluation_definition_id,
+        evaluation_definition_version =
+            s.evaluation_definition_version,
+        evaluation_start_timestamp =
+            s.evaluation_start_timestamp,
+        evaluation_submit_timestamp =
+            s.evaluation_submit_timestamp,
+        evaluation_score_percentage =
+            s.evaluation_score_percentage,
+        creator = s.creator,
+        auto_evaluated = s.auto_evaluated,
+        resubmitted = s.resubmitted,
+        evaluation_source = s.evaluation_source,
+        evaluation_type = s.evaluation_type,
+        calibration_session_id =
+            s.calibration_session_id,
+        evaluated_participant_id =
+            s.evaluated_participant_id,
+        evaluated_participant_role =
+            s.evaluated_participant_role,
+        evaluation_acknowledger_comment =
+            s.evaluation_acknowledger_comment,
+        evaluation_acknowledged_timestamp =
+            s.evaluation_acknowledged_timestamp,
+        evaluation_acknowledged_by_user_name =
+            s.evaluation_acknowledged_by_user_name,
+        evaluation_acknowledged_by_user_id =
+            s.evaluation_acknowledged_by_user_id,
+        metadata = s.metadata,
+        sections = s.sections,
+        questions = s.questions,
+        source_file = s.source_file,
+        processed_at = s.processed_at,
+        year = s.year,
+        month = s.month,
+        day = s.day
+    FROM {staging_table} AS s
+    WHERE t.evaluation_id = s.evaluation_id;
 
     INSERT INTO {target_table} (
         schema_version,
