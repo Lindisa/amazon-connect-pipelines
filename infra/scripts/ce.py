@@ -1,4 +1,3 @@
-```python
 import sys
 import json
 
@@ -40,7 +39,9 @@ args = getResolvedOptions(sys.argv, [
 source_prefix = args["source_prefix"].strip("/")
 target_prefix = args["target_prefix"].strip("/")
 
-initial_load = args["initial_load"].strip().lower() == "true"
+initial_load = (
+    args["initial_load"].strip().lower() == "true"
+)
 
 source_paths = []
 
@@ -54,7 +55,8 @@ source_paths = []
 # ------------------------------------------------------------
 if initial_load:
     source_paths.append(
-        f"s3://{args['source_bucket_name']}/{source_prefix}/"
+        f"s3://{args['source_bucket_name']}/"
+        f"{source_prefix}/"
     )
 
 else:
@@ -153,7 +155,9 @@ df = AmazonS3Datasource.toDF()
 # ------------------------------------------------------------
 raw_count = df.count()
 
-print(f"Raw Contact Evaluations records read: {raw_count}")
+print(
+    f"Raw Contact Evaluations records read: {raw_count}"
+)
 
 
 # ------------------------------------------------------------
@@ -166,7 +170,11 @@ if raw_count == 0:
 else:
 
     # --------------------------------------------------------
-    # 4. Add the source S3 object path.
+    # 4. Add and preserve the original source S3 JSON path.
+    #
+    # This column is retained in the Parquet output so that
+    # every Redshift record can be traced back to its original
+    # Contact Evaluation JSON file.
     # --------------------------------------------------------
     df = df.withColumn(
         "source_file",
@@ -229,8 +237,8 @@ else:
     )
 
     print(
-        "Records with missing year/month/day partition values: "
-        f"{invalid_partition_count}"
+        "Records with missing year/month/day partition "
+        f"values: {invalid_partition_count}"
     )
 
 
@@ -258,6 +266,9 @@ else:
     # --------------------------------------------------------
     # 8. Convert complex columns into JSON strings before
     # writing to Parquet.
+    #
+    # source_file remains a normal string column and is
+    # preserved in the output.
     # --------------------------------------------------------
     complex_columns = []
 
@@ -274,14 +285,14 @@ else:
             )
 
 
-    # --------------------------------------------------------
-    # 9. Remove the temporary source_file column.
-    # --------------------------------------------------------
-    df = df.drop("source_file")
+    print(
+        "Complex columns converted to JSON strings: "
+        f"{complex_columns}"
+    )
 
 
     # --------------------------------------------------------
-    # 10. Count final records before writing.
+    # 9. Count final records before writing.
     # --------------------------------------------------------
     final_count = df.count()
 
@@ -302,7 +313,7 @@ else:
     else:
 
         # ----------------------------------------------------
-        # 11. Convert the DataFrame back to a DynamicFrame.
+        # 10. Convert the DataFrame back to a DynamicFrame.
         # ----------------------------------------------------
         outputDf = DynamicFrame.fromDF(
             df,
@@ -312,8 +323,10 @@ else:
 
 
         # ----------------------------------------------------
-        # 12. Write Parquet files partitioned by:
+        # 11. Write Parquet files partitioned by:
         # year/month/day
+        #
+        # source_file is written as a regular Parquet column.
         # ----------------------------------------------------
         glueContext.write_dynamic_frame.from_options(
             frame=outputDf,
@@ -339,5 +352,6 @@ else:
         job.commit()
 
 
-print("===== CONTACT EVALUATIONS PRE-PROCESS COMPLETED =====")
-```
+print(
+    "===== CONTACT EVALUATIONS PRE-PROCESS COMPLETED ====="
+)
