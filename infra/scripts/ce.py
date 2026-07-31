@@ -9,12 +9,15 @@ from awsglue.job import Job
 from pyspark.context import SparkContext
 from pyspark.sql.functions import (
     col,
-    input_file_name,
     regexp_extract,
     to_json,
     length
 )
-from pyspark.sql.types import StructType, ArrayType, MapType
+from pyspark.sql.types import (
+    StructType,
+    ArrayType,
+    MapType
+)
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -85,7 +88,7 @@ target_path = (
 # ------------------------------------------------------------
 # Initialise Glue and Spark context
 # ------------------------------------------------------------
-sc = SparkContext()
+sc = SparkContext.getOrCreate()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 
@@ -93,14 +96,20 @@ job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
 
-print("===== CONTACT EVALUATIONS PRE-PROCESS STARTED =====")
+print(
+    "===== CONTACT EVALUATIONS PRE-PROCESS STARTED ====="
+)
 print(f"Job name: {args['JOB_NAME']}")
 print(f"Initial load: {initial_load}")
+print(f"Source paths: {source_paths}")
 print(f"Target path: {target_path}")
 
 
 # ------------------------------------------------------------
 # 1. Read raw Contact Evaluations JSON files from S3.
+#
+# attachFilename adds the original S3 source filename to every
+# record as source_file.
 #
 # Exclusions must be supplied to Glue as a JSON-formatted
 # string. The ** wildcard matches nested folders.
@@ -110,7 +119,8 @@ AmazonS3Datasource = (
         connection_type="s3",
         format="json",
         format_options={
-            "multiline": False
+            "multiline": False,
+            "attachFilename": "source_file"
         },
         connection_options={
             "paths": source_paths,
@@ -151,7 +161,7 @@ df = AmazonS3Datasource.toDF()
 
 
 # ------------------------------------------------------------
-# Count JSON records read from the source.
+# 3. Count JSON records read from the source.
 # ------------------------------------------------------------
 raw_count = df.count()
 
@@ -161,29 +171,66 @@ print(
 
 
 # ------------------------------------------------------------
-# 3. Stop successfully when no records were read.
+# 4. Stop successfully when no records were read.
 # ------------------------------------------------------------
 if raw_count == 0:
-    print("No Contact Evaluations records to process.")
+    print(
+        "No Contact Evaluations records to process."
+    )
+
     job.commit()
 
 else:
 
     # --------------------------------------------------------
-    # 4. Add and preserve the original source S3 JSON path.
+    # 5. Validate that Glue attached the original source file.
     #
-    # This column is retained in the Parquet output so that
-    # every Redshift record can be traced back to its original
-    # Contact Evaluation JSON file.
+    # The job deliberately fails instead of writing records
+    # without source-file traceability.
     # --------------------------------------------------------
-    df = df.withColumn(
-        "source_file",
-        input_file_name()
+    if "source_file" not in df.columns:
+        raise ValueError(
+            "source_file was not attached to the source "
+            "records."
+        )
+
+    missing_source_file_condition = (
+        col("source_file").isNull() |
+        (length(col("source_file")) == 0)
+    )
+
+    missing_source_file_count = (
+        df
+        .filter(missing_source_file_condition)
+        .count()
+    )
+
+    print(
+        "Records with missing source_file: "
+        f"{missing_source_file_count}"
+    )
+
+    if missing_source_file_count > 0:
+        raise ValueError(
+            "One or more Contact Evaluation records have "
+            "no source_file. Preprocessed output will not "
+            "be written."
+        )
+
+    print(
+        "Sample original Contact Evaluation source files:"
+    )
+
+    df.select(
+        "source_file"
+    ).show(
+        10,
+        truncate=False
     )
 
 
     # --------------------------------------------------------
-    # 5. Extract year, month and day from the source path.
+    # 6. Extract year, month and day from the source path.
     #
     # Expected source pattern:
     # .../YYYY/MM/DD/file.json
@@ -221,8 +268,8 @@ else:
 
 
     # --------------------------------------------------------
-    # 6. Identify records where partition values could not be
-    # extracted from the source path.
+    # 7. Identify records where partition values could not be
+    # extracted from the original source path.
     # --------------------------------------------------------
     invalid_partition_condition = (
         (length(col("year")) == 0) |
@@ -243,7 +290,7 @@ else:
 
 
     # --------------------------------------------------------
-    # 7. Remove records with missing partition values.
+    # 8. Remove records with missing partition values.
     #
     # This prevents Glue from creating default Hive
     # partition folders.
@@ -254,7 +301,6 @@ else:
         (length(col("day")) > 0)
     )
 
-
     valid_partition_count = df.count()
 
     print(
@@ -264,18 +310,21 @@ else:
 
 
     # --------------------------------------------------------
-    # 8. Convert complex columns into JSON strings before
+    # 9. Convert complex columns into JSON strings before
     # writing to Parquet.
     #
-    # source_file remains a normal string column and is
-    # preserved in the output.
+    # source_file is a string column and remains unchanged.
     # --------------------------------------------------------
     complex_columns = []
 
     for field in df.schema.fields:
         if isinstance(
             field.dataType,
-            (StructType, ArrayType, MapType)
+            (
+                StructType,
+                ArrayType,
+                MapType
+            )
         ):
             complex_columns.append(field.name)
 
@@ -284,7 +333,6 @@ else:
                 to_json(col(field.name))
             )
 
-
     print(
         "Complex columns converted to JSON strings: "
         f"{complex_columns}"
@@ -292,7 +340,32 @@ else:
 
 
     # --------------------------------------------------------
-    # 9. Count final records before writing.
+    # 10. Confirm source_file is still present after all
+    # transformations.
+    # --------------------------------------------------------
+    final_missing_source_file_count = (
+        df
+        .filter(
+            col("source_file").isNull() |
+            (length(col("source_file")) == 0)
+        )
+        .count()
+    )
+
+    print(
+        "Final records with missing source_file: "
+        f"{final_missing_source_file_count}"
+    )
+
+    if final_missing_source_file_count > 0:
+        raise ValueError(
+            "source_file was lost during preprocessing. "
+            "Preprocessed output will not be written."
+        )
+
+
+    # --------------------------------------------------------
+    # 11. Count final records before writing.
     # --------------------------------------------------------
     final_count = df.count()
 
@@ -313,7 +386,7 @@ else:
     else:
 
         # ----------------------------------------------------
-        # 10. Convert the DataFrame back to a DynamicFrame.
+        # 12. Convert the DataFrame back to a DynamicFrame.
         # ----------------------------------------------------
         outputDf = DynamicFrame.fromDF(
             df,
@@ -323,8 +396,8 @@ else:
 
 
         # ----------------------------------------------------
-        # 11. Write Parquet files partitioned by:
-        # year/month/day
+        # 13. Write Parquet files partitioned by:
+        # year/month/day.
         #
         # source_file is written as a regular Parquet column.
         # ----------------------------------------------------
@@ -346,7 +419,8 @@ else:
 
         print(
             "Successfully wrote Contact Evaluations "
-            "pre-processed Parquet files."
+            "preprocessed Parquet files with source-file "
+            "traceability."
         )
 
         job.commit()
