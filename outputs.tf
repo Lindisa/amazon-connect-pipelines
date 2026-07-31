@@ -17,3 +17,11 @@ terraform import -var-file="contact-evaluations-pipeline.tfvars" "module.compute
             -var-file="${{ env.TFVARS_FILE }}" \
             "module.compute.aws_glue_crawler.ce_crawler" \
             "npsenvoicedev-dev-afs1-ce-crawler" || true
+
+git rm --cached infra/env/dev/*.tfvars
+git rm --cached infra/env/sit/*.tfvars
+git rm --cached infra/env/uat/*.tfvars
+
+git add .gitignore
+git commit -m "Stop tracking environment tfvars files"
+git push
