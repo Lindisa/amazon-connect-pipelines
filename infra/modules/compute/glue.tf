@@ -1,4 +1,3 @@
-```hcl
 # ============================================================
 # GLUE SECURITY CONFIGURATION
 # ============================================================
@@ -43,10 +42,31 @@ data "aws_glue_connection" "redshift_connection" {
 
 # ============================================================
 # EXISTING SHARED NETWORK GLUE CONNECTION
+#
+# This resource is imported into the Contact Evaluations
+# Terraform state by the deployment workflow before planning.
+#
+# prevent_destroy protects the shared connection from deletion.
+# ignore_changes prevents this pipeline from updating the
+# connection configuration owned by the Contact Lens pipeline.
 # ============================================================
 
-data "aws_glue_connection" "network_connection" {
-  id = "${data.aws_caller_identity.current.account_id}:${var.network_glue_connection_name}"
+resource "aws_glue_connection" "network_connection" {
+  name            = var.network_glue_connection_name
+  connection_type = "NETWORK"
+
+  lifecycle {
+    prevent_destroy = true
+
+    ignore_changes = [
+      connection_type,
+      description,
+      match_criteria,
+      physical_connection_requirements,
+      tags,
+      tags_all
+    ]
+  }
 }
 
 
@@ -75,7 +95,7 @@ resource "aws_glue_job" "ce_preprocess_job" {
   }
 
   connections = [
-    data.aws_glue_connection.network_connection.name,
+    aws_glue_connection.network_connection.name,
     data.aws_glue_connection.redshift_connection.name
   ]
 
@@ -98,6 +118,10 @@ resource "aws_glue_job" "ce_preprocess_job" {
   }
 
   security_configuration = aws_glue_security_configuration.ce_sec_config.name
+
+  depends_on = [
+    aws_glue_connection.network_connection
+  ]
 }
 
 
@@ -163,7 +187,7 @@ resource "aws_glue_job" "ce_redshift_job" {
   }
 
   connections = [
-    data.aws_glue_connection.network_connection.name,
+    aws_glue_connection.network_connection.name,
     data.aws_glue_connection.redshift_connection.name
   ]
 
@@ -187,6 +211,10 @@ resource "aws_glue_job" "ce_redshift_job" {
   }
 
   security_configuration = aws_glue_security_configuration.ce_sec_config.name
+
+  depends_on = [
+    aws_glue_connection.network_connection
+  ]
 }
 
 
@@ -248,4 +276,3 @@ resource "aws_glue_trigger" "ce_redshift_trigger" {
     }
   }
 }
-```
