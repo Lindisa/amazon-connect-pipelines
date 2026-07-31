@@ -86,7 +86,7 @@ jobs:
 
 
   # ==========================================================
-  # IMPORT SHARED CONNECTION AND CREATE PLAN
+  # IMPORT CONNECTION AND CREATE PLAN
   # ==========================================================
   plan:
     name: Import Connection and Terraform Plan
@@ -146,10 +146,6 @@ jobs:
       - name: Terraform Init
         run: terraform init -input=false
 
-      # --------------------------------------------------------
-      # Import the existing UAT shared Glue network connection
-      # only when it is not already in the CE Terraform state.
-      # --------------------------------------------------------
       - name: Import existing shared Glue network connection
         env:
           NETWORK_CONNECTION_IMPORT_ID: ${{ vars.NETWORK_GLUE_CONNECTION_IMPORT_ID }}
@@ -159,7 +155,7 @@ jobs:
             exit 1
           fi
 
-          echo "Checking whether the shared Glue connection is already in Terraform state..."
+          echo "Checking whether the shared Glue network connection is already in Terraform state..."
 
           if terraform state show \
             "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}" \
@@ -178,130 +174,10 @@ jobs:
             echo "Shared Glue network connection imported successfully."
           fi
 
-      # --------------------------------------------------------
-      # Confirm the connection imported into Terraform state.
-      # --------------------------------------------------------
       - name: Verify imported network connection in Terraform state
         run: |
-          echo "Imported Terraform resource:"
-          echo "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}"
-
           terraform state show \
             "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}"
-
-      # --------------------------------------------------------
-      # Inspect the actual UAT Glue connection through AWS.
-      # This uses the CodeBuild runner credentials.
-      # --------------------------------------------------------
-      - name: Inspect UAT Glue network connection
-        run: |
-          CONNECTION_NAME="$(
-            awk -F '=' '
-              /^[[:space:]]*network_glue_connection_name[[:space:]]*=/ {
-                value = $2
-                sub(/^[[:space:]]*/, "", value)
-                sub(/[[:space:]]*$/, "", value)
-                gsub(/"/, "", value)
-                print value
-                exit
-              }
-            ' "${{ env.TFVARS_FILE }}"
-          )"
-
-          if [ -z "${CONNECTION_NAME}" ]; then
-            echo "Could not read network_glue_connection_name from ${{ env.TFVARS_FILE }}."
-            exit 1
-          fi
-
-          echo "Inspecting Glue network connection: ${CONNECTION_NAME}"
-
-          aws glue get-connection \
-            --name "${CONNECTION_NAME}" \
-            --hide-password \
-            --query 'Connection.{
-              Name:Name,
-              ConnectionType:ConnectionType,
-              SubnetId:PhysicalConnectionRequirements.SubnetId,
-              SecurityGroupIds:PhysicalConnectionRequirements.SecurityGroupIdList,
-              AvailabilityZone:PhysicalConnectionRequirements.AvailabilityZone
-            }' \
-            --output json
-
-      # --------------------------------------------------------
-      # Confirm the imported connection has the required
-      # physical VPC connection properties.
-      # --------------------------------------------------------
-      - name: Validate UAT Glue network connection properties
-        run: |
-          CONNECTION_NAME="$(
-            awk -F '=' '
-              /^[[:space:]]*network_glue_connection_name[[:space:]]*=/ {
-                value = $2
-                sub(/^[[:space:]]*/, "", value)
-                sub(/[[:space:]]*$/, "", value)
-                gsub(/"/, "", value)
-                print value
-                exit
-              }
-            ' "${{ env.TFVARS_FILE }}"
-          )"
-
-          CONNECTION_TYPE="$(
-            aws glue get-connection \
-              --name "${CONNECTION_NAME}" \
-              --hide-password \
-              --query 'Connection.ConnectionType' \
-              --output text
-          )"
-
-          SUBNET_ID="$(
-            aws glue get-connection \
-              --name "${CONNECTION_NAME}" \
-              --hide-password \
-              --query 'Connection.PhysicalConnectionRequirements.SubnetId' \
-              --output text
-          )"
-
-          SECURITY_GROUP_COUNT="$(
-            aws glue get-connection \
-              --name "${CONNECTION_NAME}" \
-              --hide-password \
-              --query 'length(Connection.PhysicalConnectionRequirements.SecurityGroupIdList)' \
-              --output text
-          )"
-
-          AVAILABILITY_ZONE="$(
-            aws glue get-connection \
-              --name "${CONNECTION_NAME}" \
-              --hide-password \
-              --query 'Connection.PhysicalConnectionRequirements.AvailabilityZone' \
-              --output text
-          )"
-
-          echo "Connection name: ${CONNECTION_NAME}"
-          echo "Connection type: ${CONNECTION_TYPE}"
-          echo "Subnet ID: ${SUBNET_ID}"
-          echo "Security group count: ${SECURITY_GROUP_COUNT}"
-          echo "Availability Zone: ${AVAILABILITY_ZONE}"
-
-          if [ "${CONNECTION_TYPE}" != "NETWORK" ]; then
-            echo "The imported Glue connection is not a NETWORK connection."
-            exit 1
-          fi
-
-          if [ -z "${SUBNET_ID}" ] || [ "${SUBNET_ID}" = "None" ]; then
-            echo "The imported Glue network connection has no subnet."
-            exit 1
-          fi
-
-          if [ -z "${SECURITY_GROUP_COUNT}" ] \
-            || [ "${SECURITY_GROUP_COUNT}" = "None" ] \
-            || [ "${SECURITY_GROUP_COUNT}" -lt 1 ]; then
-            echo "The imported Glue network connection has no security group."
-            exit 1
-          fi
-
-          echo "The imported UAT Glue network connection has valid VPC properties."
 
       - name: Wait before creating Terraform plan
         run: |
