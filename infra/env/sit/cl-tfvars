@@ -1,107 +1,100 @@
-# ============================================================
-# SECURITY MODULE
-# ============================================================
+# =========================================================
+# GLOBAL
+# =========================================================
 
-module "security" {
-  source = "../../modules/security"
+aws_region  = "af-south-1"
+environment = "sit"
 
-  resource_prefix = var.resource_prefix
-  environment     = var.environment
-
-  source_bucket_name       = var.source_bucket_name
-  target_bucket_name       = var.target_bucket_name
-  glue_scripts_bucket_name = var.glue_scripts_bucket_name
-
-  kms_key_arn                 = var.kms_key_arn
-  s3_script_store_kms_key_arn = var.s3_script_store_kms_key_arn
-}
+project_id      = "contact-lens-pipeline"
+project_name    = "contact-lens-pipeline"
+resource_prefix = "npsenvoicesit"
 
 
-# ============================================================
-# STORAGE MODULE
-# ============================================================
+# =========================================================
+# S3
+# =========================================================
 
-module "storage" {
-  source = "../../modules/storage"
+source_bucket_name = "afs1-npsenvoicesit-voice-connect-storage-sit"
 
-  resource_prefix = var.resource_prefix
-  environment     = var.environment
+# Contact Lens source JSON location
+source_prefix = "Analysis/Voice/"
 
-  source_bucket_name = var.source_bucket_name
-  target_bucket_name = var.target_bucket_name
+target_bucket_name = "afs1-npsenvoicesit-voice-connect-storage-sit"
 
-  glue_crawler_role_arn = var.glue_crawler_role_arn
-}
+# Partitioned Parquet output location
+target_prefix = "Analysis/Voice/contact-lens/pre-processed/"
+
+glue_scripts_bucket_name = "afs1-sit-conivr-voice-connect-storage-etl-script-store"
 
 
-# ============================================================
-# COMPUTE MODULE
-# ============================================================
+# =========================================================
+# NEW GLUE CONNECTIONS
+# =========================================================
 
-module "compute" {
-  source = "../../modules/compute"
+network_glue_connection_name = "NPS_Network_Connection_sit_92"
 
-  resource_prefix = var.resource_prefix
-  environment     = var.environment
+redshift_glue_connection_name = "Amazon_Redshift_Connection_sit_92"
 
-  # ==========================================================
-  # IAM ROLES
-  # ==========================================================
 
-  glue_preprocess_role_arn = module.security.glue_preprocess_role_arn
-  glue_redshift_role_arn   = module.security.glue_redshift_role_arn
-  glue_crawler_role_arn    = var.glue_crawler_role_arn
+# =========================================================
+# GLUE CONNECTION NETWORK CONFIGURATION
+# =========================================================
 
-  redshift_role_arn = var.redshift_role_arn
+glue_connection_availability_zone = "af-south-1a"
 
-  # ==========================================================
-  # GLUE CONNECTIONS
-  # ==========================================================
+glue_connection_subnet_id = "subnet-0980c565baf160215"
 
-  network_glue_connection_name  = var.network_glue_connection_name
-  redshift_glue_connection_name = var.redshift_glue_connection_name
+glue_connection_security_group_ids = [
+  "sg-0cc43dc09a5e0b10a"
+]
 
-  glue_connection_availability_zone = var.glue_connection_availability_zone
-  glue_connection_subnet_id          = var.glue_connection_subnet_id
-  glue_connection_security_group_ids = var.glue_connection_security_group_ids
 
-  # ==========================================================
-  # REDSHIFT JDBC
-  # ==========================================================
+# =========================================================
+# REDSHIFT JDBC CONNECTION
+#
+# Use the endpoint from the existing
+# Amazon_Redshift_Connection_sit connection.
+# The database is amazonconnectdatawarehouse.
+# =========================================================
 
-  redshift_jdbc_url = var.redshift_jdbc_url
-  redshift_username = var.redshift_username
-  redshift_password = var.redshift_password
+redshift_jdbc_url = "jdbc:redshift://<SIT_REDSHIFT_ENDPOINT>:5439/amazonconnectdatawarehouse"
 
-  # ==========================================================
-  # S3
-  # ==========================================================
+# These values should be supplied through protected
+# GitHub environment secrets as TF_VAR variables.
+#
+# TF_VAR_redshift_username
+# TF_VAR_redshift_password
 
-  scripts_bucket = var.glue_scripts_bucket_name
-  temp_bucket    = var.target_bucket_name
-  source_prefix  = var.source_prefix
 
-  # ==========================================================
-  # GLUE CATALOG
-  # ==========================================================
+# =========================================================
+# GLUE DATA CATALOG
+# =========================================================
 
-  glue_catalog_database = var.glue_catalog_database
-  glue_catalog_table    = var.glue_catalog_table
+glue_catalog_database = "connect_db_sit"
 
-  # ==========================================================
-  # REDSHIFT TARGET
-  # ==========================================================
+glue_catalog_table = "contactlens_pre_processed"
 
-  redshift_target_table = var.redshift_target_table
 
-  # ==========================================================
-  # KMS
-  # ==========================================================
+# =========================================================
+# REDSHIFT
+# =========================================================
 
-  kms_key_arn = var.kms_key_arn
+redshift_target_table = "public.contact_lens"
 
-  depends_on = [
-    module.security,
-    module.storage
-  ]
-}
+redshift_role_arn = "arn:aws:iam::196004716891:role/customer-managed/svc-s3-access-npsenvoicedev-sit-voice-redshift-cm"
+
+
+# =========================================================
+# GLUE CRAWLER IAM ROLE
+# =========================================================
+
+glue_crawler_role_arn = "arn:aws:iam::196004716891:role/customer-managed/aws-service-s3-access-npsenvoicedev-sit-voice-cm"
+
+
+# =========================================================
+# KMS
+# =========================================================
+
+s3_script_store_kms_key_arn = "arn:aws:kms:af-south-1:782747290936:key/e6c1bff8-db84-4442-b66f-309c7082054d"
+
+kms_key_arn = "arn:aws:kms:af-south-1:196004716891:key/mrk-818aa7ac95234365ab7633e9a1567068"
