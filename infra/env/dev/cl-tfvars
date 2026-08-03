@@ -1,0 +1,65 @@
+# =========================================================
+# GLOBAL
+# =========================================================
+
+aws_region  = "af-south-1"
+environment = "dev"
+
+project_id   = "contact-lens-pipeline"
+project_name = "contact-lens-pipeline"
+
+# =========================================================
+# S3
+# =========================================================
+
+source_bucket_name = "afs1-npsenvoicedev-voice-connect-storage-dev"
+
+# Updated to support partitioned ingestion
+source_prefix = "Analysis/Voice/"
+
+target_bucket_name = "afs1-npsenvoicedev-voice-connect-storage-dev"
+
+# Partitioned parquet output
+target_prefix = "contact-lens/pre-processed/"
+
+glue_scripts_bucket_name = "afs1-dev-conivr-voice-connect-storage-etl-script-store"
+
+# =========================================================
+# GLUE CONNECTIONS
+# =========================================================
+
+network_glue_connection_name  = "nps-dev-network-92"
+redshift_glue_connection_name = "amazon-redshift-dev-92"
+
+glue_connection_availability_zone = "<availability-zone>"
+glue_connection_subnet_id          = "<subnet-id>"
+
+glue_connection_security_group_ids = [
+  "<security-group-id>"
+]
+
+redshift_jdbc_url = "jdbc:redshift://<redshift-endpoint>:5439/<database>"
+redshift_username = "<username>"
+redshift_password = "<password>"
+
+# =========================================================
+# GLUE CATALOG
+# =========================================================
+
+glue_catalog_database = "connect_db_dev"
+
+glue_catalog_table = "contactlens_pre_processed"
+
+# =========================================================
+# REDSHIFT
+# =========================================================
+
+redshift_database = "amazonconnectdev"
+
+redshift_target_table = "public.contact_lens"
+
+# =========================================================
+# KMS
+# =========================================================
+
+kms_key_arn = "arn:aws:kms:af-south-1:922783576687:key/mrk-7085ea86aeea4c39ba7c7184f2232ed1"
