@@ -1,155 +1,107 @@
 # ============================================================
-# GLOBAL
+# SECURITY MODULE
 # ============================================================
 
-variable "aws_region" {
-  description = "AWS region where the Contact Lens pipeline is deployed"
-  type        = string
-}
+module "security" {
+  source = "../../modules/security"
 
-variable "environment" {
-  description = "Deployment environment, for example dev, sit, uat or prod"
-  type        = string
-}
+  resource_prefix = var.resource_prefix
+  environment     = var.environment
 
-variable "project_id" {
-  description = "Contact Lens pipeline project identifier"
-  type        = string
-}
+  source_bucket_name       = var.source_bucket_name
+  target_bucket_name       = var.target_bucket_name
+  glue_scripts_bucket_name = var.glue_scripts_bucket_name
 
-variable "project_name" {
-  description = "Contact Lens pipeline project name"
-  type        = string
-}
-
-variable "resource_prefix" {
-  description = "Prefix used when naming Contact Lens resources"
-  type        = string
+  kms_key_arn                 = var.kms_key_arn
+  s3_script_store_kms_key_arn = var.s3_script_store_kms_key_arn
 }
 
 
 # ============================================================
-# S3
+# STORAGE MODULE
 # ============================================================
 
-variable "source_bucket_name" {
-  description = "S3 bucket containing the source Contact Lens data"
-  type        = string
-}
+module "storage" {
+  source = "../../modules/storage"
 
-variable "source_prefix" {
-  description = "S3 prefix containing the source Contact Lens data"
-  type        = string
-}
+  resource_prefix = var.resource_prefix
+  environment     = var.environment
 
-variable "target_bucket_name" {
-  description = "S3 bucket containing processed Contact Lens data"
-  type        = string
-}
+  source_bucket_name = var.source_bucket_name
+  target_bucket_name = var.target_bucket_name
 
-variable "target_prefix" {
-  description = "S3 prefix used for the processed Contact Lens output"
-  type        = string
-}
-
-variable "glue_scripts_bucket_name" {
-  description = "S3 bucket containing the Contact Lens Glue scripts"
-  type        = string
+  glue_crawler_role_arn = var.glue_crawler_role_arn
 }
 
 
 # ============================================================
-# GLUE NETWORK CONNECTION
+# COMPUTE MODULE
 # ============================================================
 
-variable "network_glue_connection_name" {
-  description = "Name of the Contact Lens Glue NETWORK connection"
-  type        = string
-}
+module "compute" {
+  source = "../../modules/compute"
 
-variable "glue_connection_availability_zone" {
-  description = "Availability Zone containing the subnet used by the Glue connections"
-  type        = string
-}
+  resource_prefix = var.resource_prefix
+  environment     = var.environment
 
-variable "glue_connection_subnet_id" {
-  description = "Subnet ID used by the Contact Lens Glue connections"
-  type        = string
-}
+  # ==========================================================
+  # IAM ROLES
+  # ==========================================================
 
-variable "glue_connection_security_group_ids" {
-  description = "Security group IDs assigned to the Contact Lens Glue connections"
-  type        = list(string)
-}
+  glue_preprocess_role_arn = module.security.glue_preprocess_role_arn
+  glue_redshift_role_arn   = module.security.glue_redshift_role_arn
+  glue_crawler_role_arn    = var.glue_crawler_role_arn
 
+  redshift_role_arn = var.redshift_role_arn
 
-# ============================================================
-# REDSHIFT JDBC GLUE CONNECTION
-# ============================================================
+  # ==========================================================
+  # GLUE CONNECTIONS
+  # ==========================================================
 
-variable "redshift_glue_connection_name" {
-  description = "Name of the Contact Lens Redshift JDBC Glue connection"
-  type        = string
-}
+  network_glue_connection_name  = var.network_glue_connection_name
+  redshift_glue_connection_name = var.redshift_glue_connection_name
 
-variable "redshift_jdbc_url" {
-  description = "JDBC URL used by the Contact Lens Redshift Glue connection"
-  type        = string
-}
+  glue_connection_availability_zone = var.glue_connection_availability_zone
+  glue_connection_subnet_id          = var.glue_connection_subnet_id
+  glue_connection_security_group_ids = var.glue_connection_security_group_ids
 
-variable "redshift_username" {
-  description = "Username used by the Contact Lens Redshift JDBC connection"
-  type        = string
-  sensitive   = true
-}
+  # ==========================================================
+  # REDSHIFT JDBC
+  # ==========================================================
 
-variable "redshift_password" {
-  description = "Password used by the Contact Lens Redshift JDBC connection"
-  type        = string
-  sensitive   = true
-}
+  redshift_jdbc_url = var.redshift_jdbc_url
+  redshift_username = var.redshift_username
+  redshift_password = var.redshift_password
 
+  # ==========================================================
+  # S3
+  # ==========================================================
 
-# ============================================================
-# GLUE DATA CATALOG
-# ============================================================
+  scripts_bucket = var.glue_scripts_bucket_name
+  temp_bucket    = var.target_bucket_name
+  source_prefix  = var.source_prefix
 
-variable "glue_catalog_database" {
-  description = "Glue Data Catalog database containing the Contact Lens table"
-  type        = string
-}
+  # ==========================================================
+  # GLUE CATALOG
+  # ==========================================================
 
-variable "glue_catalog_table" {
-  description = "Glue Data Catalog table read by the Contact Lens Redshift job"
-  type        = string
-}
+  glue_catalog_database = var.glue_catalog_database
+  glue_catalog_table    = var.glue_catalog_table
 
+  # ==========================================================
+  # REDSHIFT TARGET
+  # ==========================================================
 
-# ============================================================
-# REDSHIFT
-# ============================================================
+  redshift_target_table = var.redshift_target_table
 
-variable "redshift_target_table" {
-  description = "Redshift target table populated by the Contact Lens Glue job"
-  type        = string
-}
+  # ==========================================================
+  # KMS
+  # ==========================================================
 
-variable "redshift_role_arn" {
-  description = "IAM role ARN used by Redshift to access Contact Lens data in S3"
-  type        = string
-}
+  kms_key_arn = var.kms_key_arn
 
-
-# ============================================================
-# KMS
-# ============================================================
-
-variable "kms_key_arn" {
-  description = "KMS key ARN used by the Contact Lens Glue security configuration"
-  type        = string
-}
-
-variable "s3_script_store_kms_key_arn" {
-  description = "KMS key ARN used to encrypt the Glue script-store bucket"
-  type        = string
+  depends_on = [
+    module.security,
+    module.storage
+  ]
 }
