@@ -3,7 +3,7 @@
 # ============================================================
 
 variable "aws_region" {
-  description = "AWS region where Contact Lens resources are deployed"
+  description = "AWS region where the Contact Lens pipeline is deployed"
   type        = string
 }
 
@@ -13,17 +13,17 @@ variable "environment" {
 }
 
 variable "project_id" {
-  description = "Identifier for the Contact Lens pipeline project"
+  description = "Contact Lens pipeline project identifier"
   type        = string
 }
 
 variable "project_name" {
-  description = "Name of the Contact Lens pipeline project"
+  description = "Contact Lens pipeline project name"
   type        = string
 }
 
 variable "resource_prefix" {
-  description = "Prefix used when naming Contact Lens AWS resources"
+  description = "Prefix used when naming Contact Lens resources"
   type        = string
 }
 
@@ -48,7 +48,7 @@ variable "target_bucket_name" {
 }
 
 variable "target_prefix" {
-  description = "S3 prefix used for processed Contact Lens output"
+  description = "S3 prefix used for the processed Contact Lens output"
   type        = string
 }
 
@@ -59,38 +59,13 @@ variable "glue_scripts_bucket_name" {
 
 
 # ============================================================
-# GLUE DATA CATALOG
-# ============================================================
-
-variable "glue_catalog_database" {
-  description = "Glue Data Catalog database containing the Contact Lens table"
-  type        = string
-}
-
-variable "glue_catalog_table" {
-  description = "Glue Data Catalog table read by the Contact Lens Redshift job"
-  type        = string
-}
-
-
-# ============================================================
-# GLUE CONNECTION NAMES
+# GLUE NETWORK CONNECTION
 # ============================================================
 
 variable "network_glue_connection_name" {
-  description = "Name of the Contact Lens NETWORK Glue connection"
+  description = "Name of the Contact Lens Glue NETWORK connection"
   type        = string
 }
-
-variable "redshift_glue_connection_name" {
-  description = "Name of the Contact Lens Redshift JDBC Glue connection"
-  type        = string
-}
-
-
-# ============================================================
-# GLUE CONNECTION NETWORK CONFIGURATION
-# ============================================================
 
 variable "glue_connection_availability_zone" {
   description = "Availability Zone containing the subnet used by the Glue connections"
@@ -109,8 +84,13 @@ variable "glue_connection_security_group_ids" {
 
 
 # ============================================================
-# REDSHIFT JDBC CONNECTION
+# REDSHIFT JDBC GLUE CONNECTION
 # ============================================================
+
+variable "redshift_glue_connection_name" {
+  description = "Name of the Contact Lens Redshift JDBC Glue connection"
+  type        = string
+}
 
 variable "redshift_jdbc_url" {
   description = "JDBC URL used by the Contact Lens Redshift Glue connection"
@@ -131,13 +111,23 @@ variable "redshift_password" {
 
 
 # ============================================================
-# REDSHIFT
+# GLUE DATA CATALOG
 # ============================================================
 
-variable "redshift_database" {
-  description = "Name of the Redshift database used by the Contact Lens pipeline"
+variable "glue_catalog_database" {
+  description = "Glue Data Catalog database containing the Contact Lens table"
   type        = string
 }
+
+variable "glue_catalog_table" {
+  description = "Glue Data Catalog table read by the Contact Lens Redshift job"
+  type        = string
+}
+
+
+# ============================================================
+# REDSHIFT
+# ============================================================
 
 variable "redshift_target_table" {
   description = "Redshift target table populated by the Contact Lens Glue job"
