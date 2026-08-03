@@ -1,0 +1,106 @@
+# =========================================================
+# GLOBAL
+# =========================================================
+
+aws_region  = "af-south-1"
+environment = "prod"
+
+project_id      = "contact-lens-pipeline"
+project_name    = "contact-lens-pipeline"
+resource_prefix = "pdintvoice-prod"
+
+
+# =========================================================
+# S3
+# =========================================================
+
+source_bucket_name = "afs1-acvoice-voice-connect-storage-prd"
+
+# Contact Lens source JSON location
+source_prefix = "Analysis/Voice/"
+
+target_bucket_name = "afs1-acvoice-voice-connect-storage-prd"
+
+# Partitioned Parquet output location
+target_prefix = "Analysis/Voice/contact-lens/pre-processed/"
+
+glue_scripts_bucket_name = "afs1-prd-acvoice-connect-storage-etl-script-store"
+
+
+# =========================================================
+# NEW GLUE CONNECTION NAMES
+# =========================================================
+
+network_glue_connection_name = "NPS_Network_Connection_prod_92"
+
+redshift_glue_connection_name = "Amazon_Redshift_Connection_prod_92"
+
+
+# =========================================================
+# NEW GLUE CONNECTION NETWORK CONFIGURATION
+#
+# Replace the subnet and AZ below with the new available
+# production Data B/Data C subnet selected for these jobs.
+#
+# Do not use the existing subnet if it is the subnet whose
+# available IP addresses are already under pressure.
+# =========================================================
+
+glue_connection_availability_zone = "<PROD_NEW_SUBNET_AVAILABILITY_ZONE>"
+
+glue_connection_subnet_id = "<PROD_NEW_SUBNET_ID>"
+
+glue_connection_security_group_ids = [
+  "sg-09b9f02e13646eba8"
+]
+
+
+# =========================================================
+# REDSHIFT JDBC CONNECTION
+#
+# Use the same endpoint and database currently used by:
+# Amazon_Redshift_Connection_prod
+#
+# Only the Glue connection and subnet placement are changing.
+# =========================================================
+
+redshift_jdbc_url = "jdbc:redshift://<PROD_REDSHIFT_ENDPOINT>:5439/amazonconnectdatawarehouse"
+
+# Supply these through the protected PROD GitHub environment:
+#
+# TF_VAR_redshift_username
+# TF_VAR_redshift_password
+
+
+# =========================================================
+# GLUE DATA CATALOG
+# =========================================================
+
+glue_catalog_database = "connect_db_prod"
+
+glue_catalog_table = "contactlens_pre_processed"
+
+
+# =========================================================
+# REDSHIFT
+# =========================================================
+
+redshift_target_table = "public.contact_lens"
+
+redshift_role_arn = "arn:aws:iam::302829259763:role/customer-managed/svc-s3-access-pdintvoice-prod-voice-redshift-cm"
+
+
+# =========================================================
+# GLUE CRAWLER IAM ROLE
+# =========================================================
+
+glue_crawler_role_arn = "arn:aws:iam::302829259763:role/customer-managed/aws-service-s3-access-pdintvoice-prod-voice-cm"
+
+
+# =========================================================
+# KMS
+# =========================================================
+
+s3_script_store_kms_key_arn = "arn:aws:kms:af-south-1:782747290936:key/86850475-dade-4446-b896-99e104a1175d"
+
+kms_key_arn = "arn:aws:kms:af-south-1:302829259763:key/mrk-e58e9443c5414b80922938ecc3a29f23"
