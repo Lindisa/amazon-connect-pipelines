@@ -26,9 +26,6 @@ resource "aws_glue_security_configuration" "cl_sec_config" {
 
 # ============================================================
 # CONTACT LENS NETWORK GLUE CONNECTION
-#
-# This connection is created and managed by the Contact Lens
-# pipeline. The VPC is determined by the configured subnet.
 # ============================================================
 
 resource "aws_glue_connection" "cl_network_connection" {
@@ -52,9 +49,6 @@ resource "aws_glue_connection" "cl_network_connection" {
 
 # ============================================================
 # CONTACT LENS REDSHIFT JDBC GLUE CONNECTION
-#
-# This connection is created and managed by the Contact Lens
-# pipeline using the configured subnet and security groups.
 # ============================================================
 
 resource "aws_glue_connection" "cl_redshift_connection" {
@@ -132,6 +126,7 @@ resource "aws_glue_job" "cl_preprocess_job" {
   security_configuration = aws_glue_security_configuration.cl_sec_config.name
 
   depends_on = [
+    aws_s3_object.preprocess_script,
     aws_glue_connection.cl_network_connection,
     aws_glue_connection.cl_redshift_connection
   ]
@@ -195,7 +190,7 @@ resource "aws_glue_job" "cl_redshift_job" {
 
   command {
     name            = "glueetl"
-    script_location = "s3://${var.scripts_bucket}/contact-lens/load-contact-lens-to-redshift.py"
+    script_location = "s3://${var.scripts_bucket}/contact-lens/load-to-redshift.py"
     python_version  = "3"
   }
 
@@ -226,6 +221,7 @@ resource "aws_glue_job" "cl_redshift_job" {
   security_configuration = aws_glue_security_configuration.cl_sec_config.name
 
   depends_on = [
+    aws_s3_object.redshift_script,
     aws_glue_connection.cl_network_connection,
     aws_glue_connection.cl_redshift_connection
   ]
