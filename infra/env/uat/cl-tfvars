@@ -1,0 +1,102 @@
+# =========================================================
+# GLOBAL
+# =========================================================
+
+aws_region  = "af-south-1"
+environment = "uat"
+
+project_id      = "contact-lens-pipeline"
+project_name    = "contact-lens-pipeline"
+resource_prefix = "npsenvoiceuat"
+
+
+# =========================================================
+# S3
+# =========================================================
+
+source_bucket_name = "afs1-npsenvoicesit-voice-connect-storage-uat"
+
+# Contact Lens source JSON location
+source_prefix = "Analysis/Voice/"
+
+target_bucket_name = "afs1-npsenvoicesit-voice-connect-storage-uat"
+
+# Partitioned Parquet output location
+target_prefix = "Analysis/Voice/contact-lens/pre-processed/"
+
+glue_scripts_bucket_name = "afs1-uat-conivr-voice-connect-storage-etl-script-store"
+
+
+# =========================================================
+# NEW GLUE CONNECTION NAMES
+# =========================================================
+
+network_glue_connection_name = "NPS_Network_Connection_uat_92"
+
+redshift_glue_connection_name = "Amazon_Redshift_Connection_uat_92"
+
+
+# =========================================================
+# NEW GLUE CONNECTION NETWORK CONFIGURATION
+#
+# Do not use subnet-0980c565baf160215 here.
+# Supply the new UAT Data B / 92 subnet and its actual AZ.
+# =========================================================
+
+glue_connection_availability_zone = "<UAT_DATA_B_AVAILABILITY_ZONE>"
+
+glue_connection_subnet_id = "<UAT_DATA_B_SUBNET_ID>"
+
+glue_connection_security_group_ids = [
+  "sg-035856ce270efdf8d"
+]
+
+
+# =========================================================
+# REDSHIFT JDBC CONNECTION
+#
+# Use the same Redshift endpoint and database currently used
+# by Amazon_Redshift_Connection_uat. Only the subnet changes.
+# =========================================================
+
+redshift_jdbc_url = "jdbc:redshift://<UAT_REDSHIFT_ENDPOINT>:5439/amazonconnectdatawarehouse"
+
+# Do not commit credentials to this tfvars file.
+# Supply them through the UAT GitHub environment:
+#
+# TF_VAR_redshift_username
+# TF_VAR_redshift_password
+
+
+# =========================================================
+# GLUE DATA CATALOG
+# =========================================================
+
+glue_catalog_database = "connect_db_uat"
+
+glue_catalog_table = "contactlens_pre_processed"
+
+
+# =========================================================
+# REDSHIFT
+# =========================================================
+
+redshift_target_table = "public.contact_lens"
+
+redshift_role_arn = "arn:aws:iam::196004716891:role/customer-managed/svc-s3-access-npsenvoicedev-uat-voice-redshift-cm"
+
+
+# =========================================================
+# GLUE CRAWLER IAM ROLE
+# =========================================================
+
+glue_crawler_role_arn = "arn:aws:iam::196004716891:role/customer-managed/aws-service-s3-access-npsenvoicedev-uat-voice-cm"
+
+
+# =========================================================
+# KMS
+# =========================================================
+
+s3_script_store_kms_key_arn = "arn:aws:kms:af-south-1:782747290936:key/e6c1bff8-db84-4442-b66f-309c7082054d"
+
+kms_key_arn = "arn:aws:kms:af-south-1:196004716891:key/mrk-818aa7ac95234365ab7633e9a1567068"
