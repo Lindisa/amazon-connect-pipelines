@@ -1,107 +1,140 @@
 # ============================================================
-# SECURITY MODULE
+# GLOBAL
 # ============================================================
 
-module "security" {
-  source = "../../modules/security"
+variable "aws_region" {
+  type = string
+}
 
-  resource_prefix = var.resource_prefix
-  environment     = var.environment
+variable "environment" {
+  type = string
+}
 
-  source_bucket_name       = var.source_bucket_name
-  target_bucket_name       = var.target_bucket_name
-  glue_scripts_bucket_name = var.glue_scripts_bucket_name
+variable "project_id" {
+  type = string
+}
 
-  kms_key_arn                 = var.kms_key_arn
-  s3_script_store_kms_key_arn = var.s3_script_store_kms_key_arn
+variable "project_name" {
+  type = string
+}
+
+variable "resource_prefix" {
+  type = string
 }
 
 
 # ============================================================
-# STORAGE MODULE
+# S3
 # ============================================================
 
-module "storage" {
-  source = "../../modules/storage"
+variable "source_bucket_name" {
+  type = string
+}
 
-  resource_prefix = var.resource_prefix
-  environment     = var.environment
+variable "source_prefix" {
+  type = string
+}
 
-  source_bucket_name = var.source_bucket_name
-  target_bucket_name = var.target_bucket_name
+variable "target_bucket_name" {
+  type = string
+}
 
-  glue_crawler_role_arn = var.glue_crawler_role_arn
+variable "target_prefix" {
+  type = string
+}
+
+variable "glue_scripts_bucket_name" {
+  type = string
 }
 
 
 # ============================================================
-# COMPUTE MODULE
+# GLUE CATALOG
 # ============================================================
 
-module "compute" {
-  source = "../../modules/compute"
+variable "glue_catalog_database" {
+  type = string
+}
 
-  resource_prefix = var.resource_prefix
-  environment     = var.environment
+variable "glue_catalog_table" {
+  type = string
+}
 
-  # ==========================================================
-  # IAM ROLES
-  # ==========================================================
 
-  glue_preprocess_role_arn = module.security.glue_preprocess_role_arn
-  glue_redshift_role_arn   = module.security.glue_redshift_role_arn
-  glue_crawler_role_arn    = var.glue_crawler_role_arn
+# ============================================================
+# GLUE NETWORK CONNECTION
+# ============================================================
 
-  redshift_role_arn = var.redshift_role_arn
+variable "network_glue_connection_name" {
+  type = string
+}
 
-  # ==========================================================
-  # GLUE CONNECTIONS
-  # ==========================================================
+variable "glue_connection_availability_zone" {
+  type = string
+}
 
-  network_glue_connection_name  = var.network_glue_connection_name
-  redshift_glue_connection_name = var.redshift_glue_connection_name
+variable "glue_connection_subnet_id" {
+  type = string
+}
 
-  glue_connection_availability_zone = var.glue_connection_availability_zone
-  glue_connection_subnet_id          = var.glue_connection_subnet_id
-  glue_connection_security_group_ids = var.glue_connection_security_group_ids
+variable "glue_connection_security_group_ids" {
+  type = list(string)
+}
 
-  # ==========================================================
-  # REDSHIFT JDBC
-  # ==========================================================
 
-  redshift_jdbc_url = var.redshift_jdbc_url
-  redshift_username = var.redshift_username
-  redshift_password = var.redshift_password
+# ============================================================
+# REDSHIFT JDBC GLUE CONNECTION
+# ============================================================
 
-  # ==========================================================
-  # S3
-  # ==========================================================
+variable "redshift_glue_connection_name" {
+  type = string
+}
 
-  scripts_bucket = var.glue_scripts_bucket_name
-  temp_bucket    = var.target_bucket_name
-  source_prefix  = var.source_prefix
+variable "redshift_jdbc_url" {
+  type = string
+}
 
-  # ==========================================================
-  # GLUE CATALOG
-  # ==========================================================
+variable "redshift_username" {
+  type      = string
+  sensitive = true
+}
 
-  glue_catalog_database = var.glue_catalog_database
-  glue_catalog_table    = var.glue_catalog_table
+variable "redshift_password" {
+  type      = string
+  sensitive = true
+}
 
-  # ==========================================================
-  # REDSHIFT TARGET
-  # ==========================================================
 
-  redshift_target_table = var.redshift_target_table
+# ============================================================
+# IAM ROLES
+# ============================================================
 
-  # ==========================================================
-  # KMS
-  # ==========================================================
+variable "glue_crawler_role_arn" {
+  type = string
+}
 
-  kms_key_arn = var.kms_key_arn
+variable "redshift_role_arn" {
+  type = string
+}
 
-  depends_on = [
-    module.security,
-    module.storage
-  ]
+
+# ============================================================
+# REDSHIFT
+# ============================================================
+
+variable "redshift_target_table" {
+  type = string
+}
+
+
+# ============================================================
+# KMS
+# ============================================================
+
+variable "kms_key_arn" {
+  type = string
+}
+
+variable "s3_script_store_kms_key_arn" {
+  type = string
 }
