@@ -1,21 +1,4 @@
 # ============================================================
-# STORAGE MODULE
-# ============================================================
-
-module "storage" {
-  source = "../../modules/storage"
-
-  resource_prefix = var.resource_prefix
-  environment     = var.environment
-
-  source_bucket_name = var.source_bucket_name
-  target_bucket_name = var.target_bucket_name
-
-  glue_crawler_role_arn = module.security.glue_preprocess_role_arn
-}
-
-
-# ============================================================
 # SECURITY MODULE
 # ============================================================
 
@@ -35,6 +18,23 @@ module "security" {
 
 
 # ============================================================
+# STORAGE MODULE
+# ============================================================
+
+module "storage" {
+  source = "../../modules/storage"
+
+  resource_prefix = var.resource_prefix
+  environment     = var.environment
+
+  source_bucket_name = var.source_bucket_name
+  target_bucket_name = var.target_bucket_name
+
+  glue_crawler_role_arn = var.glue_crawler_role_arn
+}
+
+
+# ============================================================
 # COMPUTE MODULE
 # ============================================================
 
@@ -50,28 +50,24 @@ module "compute" {
 
   glue_preprocess_role_arn = module.security.glue_preprocess_role_arn
   glue_redshift_role_arn   = module.security.glue_redshift_role_arn
+  glue_crawler_role_arn    = var.glue_crawler_role_arn
 
-  # The Contact Lens crawler uses the preprocess role.
-  glue_crawler_role_arn = module.security.glue_preprocess_role_arn
-
-  # Role used by Redshift to access S3.
   redshift_role_arn = var.redshift_role_arn
 
   # ==========================================================
-  # GLUE NETWORK CONNECTION
+  # GLUE CONNECTIONS
   # ==========================================================
 
-  network_glue_connection_name = var.network_glue_connection_name
+  network_glue_connection_name  = var.network_glue_connection_name
+  redshift_glue_connection_name = var.redshift_glue_connection_name
 
   glue_connection_availability_zone = var.glue_connection_availability_zone
   glue_connection_subnet_id          = var.glue_connection_subnet_id
   glue_connection_security_group_ids = var.glue_connection_security_group_ids
 
   # ==========================================================
-  # REDSHIFT JDBC GLUE CONNECTION
+  # REDSHIFT JDBC
   # ==========================================================
-
-  redshift_glue_connection_name = var.redshift_glue_connection_name
 
   redshift_jdbc_url = var.redshift_jdbc_url
   redshift_username = var.redshift_username
@@ -88,14 +84,14 @@ module "compute" {
   target_prefix = var.target_prefix
 
   # ==========================================================
-  # GLUE DATA CATALOG
+  # GLUE CATALOG
   # ==========================================================
 
   glue_catalog_database = var.glue_catalog_database
   glue_catalog_table    = var.glue_catalog_table
 
   # ==========================================================
-  # REDSHIFT
+  # REDSHIFT TARGET
   # ==========================================================
 
   redshift_target_table = var.redshift_target_table
@@ -104,8 +100,7 @@ module "compute" {
   # KMS
   # ==========================================================
 
-  kms_key_arn                 = var.kms_key_arn
-  s3_script_store_kms_key_arn = var.s3_script_store_kms_key_arn
+  kms_key_arn = var.kms_key_arn
 
   depends_on = [
     module.security,
