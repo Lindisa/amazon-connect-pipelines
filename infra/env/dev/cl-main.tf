@@ -11,7 +11,6 @@ module "storage" {
   source_bucket_name = var.source_bucket_name
   target_bucket_name = var.target_bucket_name
 
-  # The Contact Lens preprocess role is also used by the crawler.
   glue_crawler_role_arn = module.security.glue_preprocess_role_arn
 }
 
@@ -46,20 +45,20 @@ module "compute" {
   environment     = var.environment
 
   # ==========================================================
-  # CONTACT LENS IAM ROLES
+  # IAM ROLES
   # ==========================================================
 
   glue_preprocess_role_arn = module.security.glue_preprocess_role_arn
   glue_redshift_role_arn   = module.security.glue_redshift_role_arn
 
-  # The preprocess role is also used by the Glue crawler.
+  # The Contact Lens crawler uses the preprocess role.
   glue_crawler_role_arn = module.security.glue_preprocess_role_arn
 
-  # IAM role used by Redshift when reading data from S3.
+  # Role used by Redshift to access S3.
   redshift_role_arn = var.redshift_role_arn
 
   # ==========================================================
-  # CONTACT LENS GLUE NETWORK CONNECTION
+  # GLUE NETWORK CONNECTION
   # ==========================================================
 
   network_glue_connection_name = var.network_glue_connection_name
@@ -69,7 +68,7 @@ module "compute" {
   glue_connection_security_group_ids = var.glue_connection_security_group_ids
 
   # ==========================================================
-  # CONTACT LENS REDSHIFT JDBC CONNECTION
+  # REDSHIFT JDBC GLUE CONNECTION
   # ==========================================================
 
   redshift_glue_connection_name = var.redshift_glue_connection_name
