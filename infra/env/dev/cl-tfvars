@@ -5,8 +5,10 @@
 aws_region  = "af-south-1"
 environment = "dev"
 
-project_id   = "contact-lens-pipeline"
-project_name = "contact-lens-pipeline"
+project_id      = "contact-lens-pipeline"
+project_name    = "contact-lens-pipeline"
+resource_prefix = "npsenvoicedev"
+
 
 # =========================================================
 # S3
@@ -14,52 +16,68 @@ project_name = "contact-lens-pipeline"
 
 source_bucket_name = "afs1-npsenvoicedev-voice-connect-storage-dev"
 
-# Updated to support partitioned ingestion
 source_prefix = "Analysis/Voice/"
 
 target_bucket_name = "afs1-npsenvoicedev-voice-connect-storage-dev"
 
-# Partitioned parquet output
-target_prefix = "contact-lens/pre-processed/"
+target_prefix = "Analysis/Voice/contact-lens/pre-processed/"
 
 glue_scripts_bucket_name = "afs1-dev-conivr-voice-connect-storage-etl-script-store"
 
+
 # =========================================================
-# GLUE CONNECTIONS
+# NEW GLUE CONNECTIONS
 # =========================================================
 
-network_glue_connection_name  = "nps-dev-network-92"
-redshift_glue_connection_name = "amazon-redshift-dev-92"
+network_glue_connection_name = "NPS_Network_Connection_dev_92"
 
-glue_connection_availability_zone = "<availability-zone>"
-glue_connection_subnet_id          = "<subnet-id>"
+redshift_glue_connection_name = "Amazon_Redshift_Connection_dev_92"
+
+glue_connection_availability_zone = "af-south-1a"
+
+glue_connection_subnet_id = "subnet-0f94a798d12f04a42"
 
 glue_connection_security_group_ids = [
-  "<security-group-id>"
+  "sg-021affc8ab737a277"
 ]
 
-redshift_jdbc_url = "jdbc:redshift://<redshift-endpoint>:5439/<database>"
-redshift_username = "<username>"
-redshift_password = "<password>"
 
 # =========================================================
-# GLUE CATALOG
+# REDSHIFT JDBC CONNECTION
+# =========================================================
+
+redshift_jdbc_url = "jdbc:redshift://<dev-redshift-endpoint>:5439/amazonconnectdatawarehouse"
+
+# Do not commit real credentials here.
+# Supply these using protected GitHub environment secrets.
+# redshift_username = ""
+# redshift_password = ""
+
+
+# =========================================================
+# EXISTING GLUE CATALOG
 # =========================================================
 
 glue_catalog_database = "connect_db_dev"
 
 glue_catalog_table = "contactlens_pre_processed"
 
+
 # =========================================================
 # REDSHIFT
 # =========================================================
 
-redshift_database = "amazonconnectdev"
+redshift_database = "amazonconnectdatawarehouse"
 
 redshift_target_table = "public.contact_lens"
+
+redshift_role_arn = "arn:aws:iam::922783576687:role/customer-managed/svc-s3-access-npsenvoicedev-dev-voice-redshift-cm"
+
 
 # =========================================================
 # KMS
 # =========================================================
 
 kms_key_arn = "arn:aws:kms:af-south-1:922783576687:key/mrk-7085ea86aeea4c39ba7c7184f2232ed1"
+
+s3_script_store_kms_key_arn = "arn:aws:kms:af-south-1:922783576687:key/mrk-7085ea86aeea4c39ba7c7184f2232ed1"
