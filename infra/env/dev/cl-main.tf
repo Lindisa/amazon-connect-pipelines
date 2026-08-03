@@ -79,9 +79,7 @@ module "compute" {
 
   scripts_bucket = var.glue_scripts_bucket_name
   temp_bucket    = var.target_bucket_name
-
-  source_prefix = var.source_prefix
-  target_prefix = var.target_prefix
+  source_prefix  = var.source_prefix
 
   # ==========================================================
   # GLUE CATALOG
