@@ -42,6 +42,22 @@ variable "glue_connection_name" {
   type = string
 }
 
+variable "network_glue_connection_name" {
+  type = string
+}
+
+variable "glue_connection_availability_zone" {
+  type = string
+}
+
+variable "glue_connection_subnet_id" {
+  type = string
+}
+
+variable "glue_connection_security_group_ids" {
+  type = list(string)
+}
+
 variable "glue_catalog_database" {
   type = string
 }
@@ -61,18 +77,6 @@ variable "redshift_target_table" {
 variable "kms_key_arn" {
   type        = string
   description = "Customer managed KMS key for Glue encryption"
-}
-
-variable "glue_connection_availability_zone" {
-  type = string
-}
-
-variable "glue_connection_subnet_id" {
-  type = string
-}
-
-variable "glue_connection_name_security_group_id_list" {
-  type = list(string)
 }
 
 variable "s3_script_store_kms_key_arn" {
