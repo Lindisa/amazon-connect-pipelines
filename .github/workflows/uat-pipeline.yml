@@ -57,7 +57,10 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
@@ -115,7 +118,10 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
@@ -155,6 +161,7 @@ jobs:
             exit 1
           fi
 
+          echo "Terraform resource: ${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}"
           echo "Checking whether the shared Glue network connection is already in Terraform state..."
 
           if terraform state show \
@@ -174,7 +181,7 @@ jobs:
             echo "Shared Glue network connection imported successfully."
           fi
 
-      - name: Verify imported network connection in Terraform state
+      - name: Verify imported network connection
         run: |
           terraform state show \
             "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}"
@@ -236,7 +243,10 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
