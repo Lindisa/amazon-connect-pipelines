@@ -4,8 +4,8 @@ module "compute" {
   environment     = var.environment
   resource_prefix = var.resource_prefix
 
-  glue_preprocess_role_arn = module.security.glue_preprocess_role_arn
-  glue_redshift_role_arn   = module.security.glue_redshift_role_arn
+  glue_preprocess_role_arn = var.glue_preprocess_role_arn
+  glue_redshift_role_arn   = var.glue_redshift_role_arn
   redshift_role_arn        = var.redshift_role_arn
   glue_crawler_role_arn    = var.glue_crawler_role_arn
 
