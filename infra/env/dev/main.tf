@@ -1,11 +1,25 @@
+module "security" {
+  source = "../../modules/security"
+
+  environment     = var.environment
+  resource_prefix = var.resource_prefix
+
+  source_bucket_name       = var.source_bucket_name
+  target_bucket_name       = var.target_bucket_name
+  glue_scripts_bucket_name = var.glue_scripts_bucket_name
+
+  kms_key_arn                 = var.kms_key_arn
+  s3_script_store_kms_key_arn = var.s3_script_store_kms_key_arn
+}
+
 module "compute" {
   source = "../../modules/compute"
 
   environment     = var.environment
   resource_prefix = var.resource_prefix
 
-  glue_preprocess_role_arn = var.glue_preprocess_role_arn
-  glue_redshift_role_arn   = var.glue_redshift_role_arn
+  glue_preprocess_role_arn = module.security.glue_preprocess_role_arn
+  glue_redshift_role_arn   = module.security.glue_redshift_role_arn
   redshift_role_arn        = var.redshift_role_arn
   glue_crawler_role_arn    = var.glue_crawler_role_arn
 
