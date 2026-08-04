@@ -55,6 +55,12 @@ resource "aws_glue_connection" "network_connection" {
   name            = var.network_glue_connection_name
   connection_type = "NETWORK"
 
+  physical_connection_requirements {
+    availability_zone      = var.glue_connection_availability_zone
+    subnet_id              = var.glue_connection_subnet_id
+    security_group_id_list = var.glue_connection_security_group_ids
+  }
+
   lifecycle {
     prevent_destroy = true
 
@@ -77,11 +83,11 @@ resource "aws_glue_connection" "network_connection" {
 resource "aws_glue_job" "ce_preprocess_job" {
   name              = "${var.resource_prefix}-${var.environment}-afs1-ce-pre-process"
   role_arn          = var.glue_preprocess_role_arn
-  glue_version      = "5.0"
+  glue_version      = "5.1"
   max_retries       = 0
   timeout           = 2880
-  number_of_workers = 2
-  worker_type       = "G.1X"
+  number_of_workers = 20
+  worker_type       = "G.2X"
   execution_class   = "STANDARD"
 
   execution_property {
@@ -169,11 +175,11 @@ resource "aws_glue_crawler" "ce_crawler" {
 resource "aws_glue_job" "ce_redshift_job" {
   name              = "${var.resource_prefix}-${var.environment}-afs1-ce-redshift-etl"
   role_arn          = var.glue_redshift_role_arn
-  glue_version      = "5.0"
+  glue_version      = "5.1"
   max_retries       = 0
   timeout           = 2880
-  number_of_workers = 2
-  worker_type       = "G.1X"
+  number_of_workers = 20
+  worker_type       = "G.2X"
   execution_class   = "STANDARD"
 
   execution_property {
