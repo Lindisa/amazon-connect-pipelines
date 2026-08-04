@@ -28,6 +28,10 @@ module "compute" {
 
   network_glue_connection_name = var.network_glue_connection_name
 
+  glue_connection_availability_zone  = var.glue_connection_availability_zone
+  glue_connection_subnet_id          = var.glue_connection_subnet_id
+  glue_connection_security_group_ids = var.glue_connection_security_group_ids
+
   ############################################################
   # EXISTING GLUE CATALOG
   ############################################################
