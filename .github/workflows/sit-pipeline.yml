@@ -26,10 +26,13 @@ env:
   PLAN_FILE: tfplan
   PLAN_S3_KEY: artifacts/sit/contact-evaluations-pipeline/${{ github.run_id }}/tfplan
 
-  NETWORK_CONNECTION_NAME: npsenvoicesit-sit-afs1-contact-lens-network-connection
-  NETWORK_CONNECTION_RESOURCE: module.compute.aws_glue_connection.network_connection
+  NETWORK_CONNECTION_RESOURCE_ADDRESS: module.compute.aws_glue_connection.network_connection
+
 
 jobs:
+  # ----------------------------------------------------------
+  # Validate Terraform configuration
+  # ----------------------------------------------------------
   validate:
     name: Validate Terraform
 
@@ -54,7 +57,10 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
@@ -81,6 +87,10 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
+
+  # ----------------------------------------------------------
+  # Import existing shared network connection
+  # ----------------------------------------------------------
   import-network-connection:
     name: Import Shared Network Connection
 
@@ -108,7 +118,10 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
@@ -134,41 +147,54 @@ jobs:
 
           test -s "./${{ env.TFVARS_FILE }}"
 
+          echo "Terraform variables file downloaded successfully."
+
       - name: Terraform Init
         run: terraform init -input=false
 
       - name: Import shared Glue network connection
+        env:
+          NETWORK_CONNECTION_IMPORT_ID: ${{ vars.NETWORK_GLUE_CONNECTION_IMPORT_ID }}
         run: |
-          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-          IMPORT_ID="${ACCOUNT_ID}:${{ env.NETWORK_CONNECTION_NAME }}"
+          if [ -z "${NETWORK_CONNECTION_IMPORT_ID}" ]; then
+            echo "NETWORK_GLUE_CONNECTION_IMPORT_ID is not configured."
+            exit 1
+          fi
 
-          echo "Terraform resource: ${{ env.NETWORK_CONNECTION_RESOURCE }}"
-          echo "Glue connection: ${{ env.NETWORK_CONNECTION_NAME }}"
+          echo "Terraform resource: ${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}"
+          echo "Checking whether the shared Glue connection is already in Terraform state..."
 
           if terraform state show \
-            "${{ env.NETWORK_CONNECTION_RESOURCE }}" >/dev/null 2>&1; then
+            "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}" \
+            >/dev/null 2>&1; then
 
-            echo "Shared Glue connection is already present in Terraform state."
+            echo "Shared Glue network connection is already present in Terraform state."
           else
-            echo "Importing shared Glue connection into Terraform state."
+            echo "Importing existing shared Glue network connection..."
 
             terraform import \
               -input=false \
               -var-file="${{ env.TFVARS_FILE }}" \
-              "${{ env.NETWORK_CONNECTION_RESOURCE }}" \
-              "${IMPORT_ID}"
+              "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}" \
+              "${NETWORK_CONNECTION_IMPORT_ID}"
+
+            echo "Shared Glue network connection imported successfully."
           fi
 
       - name: Verify imported connection
         run: |
           terraform state show \
-            "${{ env.NETWORK_CONNECTION_RESOURCE }}"
+            "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}"
 
       - name: Wait before creating Glue jobs
         run: |
-          echo "Waiting 60 seconds before Terraform creates the Glue jobs."
+          echo "Waiting 60 seconds before planning the Glue jobs..."
           sleep 60
 
+
+  # ----------------------------------------------------------
+  # Create and store Terraform plan
+  # ----------------------------------------------------------
   plan:
     name: Terraform Plan
 
@@ -196,7 +222,10 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
@@ -222,13 +251,15 @@ jobs:
 
           test -s "./${{ env.TFVARS_FILE }}"
 
+          echo "Terraform variables file downloaded successfully."
+
       - name: Terraform Init
         run: terraform init -input=false
 
       - name: Confirm shared network connection is in state
         run: |
           terraform state show \
-            "${{ env.NETWORK_CONNECTION_RESOURCE }}"
+            "${{ env.NETWORK_CONNECTION_RESOURCE_ADDRESS }}"
 
       - name: Terraform Plan
         run: |
@@ -243,6 +274,12 @@ jobs:
             "${{ env.PLAN_FILE }}" \
             "s3://${{ vars.ARTIFACTS_BUCKET_NAME }}/${{ env.PLAN_S3_KEY }}"
 
+          echo "Terraform plan uploaded successfully."
+
+
+  # ----------------------------------------------------------
+  # Apply the exact Terraform plan generated above
+  # ----------------------------------------------------------
   apply:
     name: Terraform Apply
 
@@ -270,7 +307,10 @@ jobs:
 
       - name: Configure SSL certificate
         run: |
-          sudo cp ./bundle.pem /etc/pki/ca-trust/source/anchors/bundle.pem
+          sudo cp \
+            ./bundle.pem \
+            /etc/pki/ca-trust/source/anchors/bundle.pem
+
           sudo update-ca-trust
 
           echo "NODE_EXTRA_CA_CERTS=$(pwd)/bundle.pem" >> "$GITHUB_ENV"
@@ -298,6 +338,8 @@ jobs:
             "${{ env.PLAN_FILE }}"
 
           test -s "${{ env.PLAN_FILE }}"
+
+          echo "Terraform plan downloaded successfully."
 
       - name: Terraform Apply
         run: |
