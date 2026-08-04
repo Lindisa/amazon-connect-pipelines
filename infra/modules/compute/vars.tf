@@ -34,7 +34,7 @@ variable "glue_connection_subnet_id" {
   type = string
 }
 
-variable "glue_connection_name_security_group_id_list" {
+variable "glue_connection_security_group_ids" {
   type = list(string)
 }
 
