@@ -1,298 +1,43 @@
-import sys
-import json
+Yes, I understand now: you mean **`infra/env/dev/main.tf` is the only local environment file that VS Code is not flagging with errors**.
 
-from awsglue.utils import getResolvedOptions
-from awsglue.context import GlueContext
-from awsglue.dynamicframe import DynamicFrame
-from awsglue.job import Job
+That makes DEV the best template. Since `main.tf` and `vars.tf` should have the same structure across DEV, SIT, UAT, and PROD, copy the DEV versions to repair SIT and UAT:
 
-from pyspark.context import SparkContext
-from pyspark.sql.functions import (
-    col,
-    input_file_name,
-    regexp_extract,
-    to_json,
-    length
-)
-from pyspark.sql.types import StructType, ArrayType, MapType
+```powershell
+Copy-Item infra/env/dev/main.tf infra/env/sit/main.tf -Force
+Copy-Item infra/env/dev/vars.tf infra/env/sit/vars.tf -Force
 
+Copy-Item infra/env/dev/main.tf infra/env/uat/main.tf -Force
+Copy-Item infra/env/dev/vars.tf infra/env/uat/vars.tf -Force
+```
 
-# ------------------------------------------------------------
-# Read required Glue job parameters
-# ------------------------------------------------------------
-args = getResolvedOptions(
-    sys.argv,
-    [
-        "JOB_NAME",
-        "source_bucket_name",
-        "source_prefix",
-        "target_bucket_name",
-        "target_prefix"
-    ]
-)
+Do **not** copy DEV’s `contact-lens-pipeline.tfvars`, because that file contains environment-specific bucket names, subnet IDs, connection names, KMS keys, and role ARNs.
 
+Then run from the repository root:
 
-# ------------------------------------------------------------
-# Build source and target S3 paths
-# ------------------------------------------------------------
-source_prefix = args["source_prefix"].strip("/")
-target_prefix = args["target_prefix"].strip("/")
+```powershell
+terraform fmt -recursive
+```
 
-source_path = (
-    f"s3://{args['source_bucket_name']}/{source_prefix}/"
-)
+Validate each environment separately:
 
-target_path = (
-    f"s3://{args['target_bucket_name']}/{target_prefix}/"
-)
+```powershell
+cd infra/env/sit
+terraform init -backend=false
+terraform validate
 
+cd ../uat
+terraform init -backend=false
+terraform validate
 
-# ------------------------------------------------------------
-# Initialise Glue and Spark context
-# ------------------------------------------------------------
-sc = SparkContext()
-glue_context = GlueContext(sc)
-spark = glue_context.spark_session
+cd ../../..
+```
 
-job = Job(glue_context)
-job.init(args["JOB_NAME"], args)
+If both pass:
 
+```powershell
+git add infra/env/sit/main.tf infra/env/sit/vars.tf infra/env/uat/main.tf infra/env/uat/vars.tf
+git commit -m "align SIT and UAT Terraform configuration with DEV"
+git push origin uat
+```
 
-print("===== CONTACT EVALUATIONS PRE-PROCESS STARTED =====")
-print(f"Source path: {source_path}")
-print(f"Target path: {target_path}")
-
-
-# ------------------------------------------------------------
-# 1. Read raw Contact Evaluations JSON files from S3.
-#
-# The mapping JSON file is stored directly inside the
-# ContactEvaluations folder and must not be processed as an
-# evaluation record.
-# ------------------------------------------------------------
-source_dynamic_frame = (
-    glue_context.create_dynamic_frame.from_options(
-        connection_type="s3",
-        format="json",
-        format_options={
-            "multiline": True
-        },
-        connection_options={
-            "paths": [source_path],
-            "recurse": True,
-            "groupFiles": "none",
-            "exclusions": json.dumps([
-                "**/eval-to-redshift-mapping.json"
-            ])
-        },
-        transformation_ctx="ContactEvaluationsS3Source"
-    )
-)
-
-
-# ------------------------------------------------------------
-# 2. Convert DynamicFrame to Spark DataFrame.
-# ------------------------------------------------------------
-df = source_dynamic_frame.toDF()
-
-raw_count = df.count()
-
-print(
-    "Raw Contact Evaluation records read from the source: "
-    f"{raw_count}"
-)
-
-
-# ------------------------------------------------------------
-# 3. Stop early if no new records were read.
-# ------------------------------------------------------------
-if raw_count == 0:
-    print("No new Contact Evaluation data to process.")
-    job.commit()
-
-else:
-
-    # --------------------------------------------------------
-    # 4. Add the source S3 object path.
-    #
-    # This is retained in the Parquet output for traceability
-    # and can also be used by the Redshift ETL for duplicate
-    # handling.
-    # --------------------------------------------------------
-    df = df.withColumn(
-        "source_file",
-        input_file_name()
-    )
-
-    print("Source files being processed:")
-
-    df.select("source_file").distinct().show(
-        100,
-        truncate=False
-    )
-
-
-    # --------------------------------------------------------
-    # 5. Extract year, month and day from the source path.
-    #
-    # Expected source structure:
-    #
-    # ContactEvaluations/YYYY/MM/DD/file.json
-    # --------------------------------------------------------
-    date_path_regex = (
-        r"/(\d{4})/(\d{2})/(\d{2})/[^/]+\.json$"
-    )
-
-    df = df.withColumn(
-        "year",
-        regexp_extract(
-            col("source_file"),
-            date_path_regex,
-            1
-        )
-    )
-
-    df = df.withColumn(
-        "month",
-        regexp_extract(
-            col("source_file"),
-            date_path_regex,
-            2
-        )
-    )
-
-    df = df.withColumn(
-        "day",
-        regexp_extract(
-            col("source_file"),
-            date_path_regex,
-            3
-        )
-    )
-
-
-    # --------------------------------------------------------
-    # 6. Count records for which partition values could not
-    # be extracted.
-    # --------------------------------------------------------
-    invalid_partition_count = df.filter(
-        (length(col("year")) == 0)
-        | (length(col("month")) == 0)
-        | (length(col("day")) == 0)
-    ).count()
-
-    print(
-        "Records with missing year/month/day values: "
-        f"{invalid_partition_count}"
-    )
-
-
-    # --------------------------------------------------------
-    # 7. Remove records with invalid partition values.
-    #
-    # This prevents creation of:
-    #
-    # year=__HIVE_DEFAULT_PARTITION__
-    # month=__HIVE_DEFAULT_PARTITION__
-    # day=__HIVE_DEFAULT_PARTITION__
-    # --------------------------------------------------------
-    df = df.filter(
-        (length(col("year")) > 0)
-        & (length(col("month")) > 0)
-        & (length(col("day")) > 0)
-    )
-
-
-    # --------------------------------------------------------
-    # 8. Convert complex fields to JSON strings.
-    #
-    # This includes structures such as:
-    #
-    # - basicQuestions
-    # - sections
-    # - metadata
-    # - evaluationSchema
-    #
-    # The exact fields are detected from the source schema.
-    # --------------------------------------------------------
-    for field in df.schema.fields:
-        if isinstance(
-            field.dataType,
-            (StructType, ArrayType, MapType)
-        ):
-            df = df.withColumn(
-                field.name,
-                to_json(col(field.name))
-            )
-
-
-    # --------------------------------------------------------
-    # 9. Count the final valid records.
-    # --------------------------------------------------------
-    final_count = df.count()
-
-    print(
-        "Final Contact Evaluation records to write: "
-        f"{final_count}"
-    )
-
-
-    # --------------------------------------------------------
-    # 10. Stop if no valid records remain.
-    # --------------------------------------------------------
-    if final_count == 0:
-        print(
-            "No valid Contact Evaluation records remain "
-            "after partition filtering."
-        )
-
-        job.commit()
-
-    else:
-
-        print("Sample records before writing:")
-
-        df.show(
-            10,
-            truncate=False
-        )
-
-
-        # ----------------------------------------------------
-        # 11. Convert the DataFrame back to a DynamicFrame.
-        # ----------------------------------------------------
-        output_dynamic_frame = DynamicFrame.fromDF(
-            df,
-            glue_context,
-            "ContactEvaluationsOutput"
-        )
-
-
-        # ----------------------------------------------------
-        # 12. Write Parquet files partitioned by date.
-        # ----------------------------------------------------
-        glue_context.write_dynamic_frame.from_options(
-            frame=output_dynamic_frame,
-            connection_type="s3",
-            connection_options={
-                "path": target_path,
-                "partitionKeys": [
-                    "year",
-                    "month",
-                    "day"
-                ]
-            },
-            format="parquet",
-            transformation_ctx="ContactEvaluationsS3Target"
-        )
-
-
-        print(
-            "Successfully wrote Contact Evaluations "
-            "Parquet records."
-        )
-
-        job.commit()
-
-
-print("===== CONTACT EVALUATIONS PRE-PROCESS COMPLETED =====")
+One important detail: you are currently on the `uat` branch, so copying DEV locally here copies the **DEV folder as it exists on the UAT branch**. That is fine because the screenshot shows that local DEV folder is the clean, matching version.
