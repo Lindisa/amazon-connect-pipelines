@@ -1,6 +1,7 @@
 name: Dev Terraform CD Pipeline
 
-# Deploy Contact Evaluations infrastructure to dev
+# Deploy Flattened CTR infrastructure to DEV
+
 on:
   push:
     branches:
@@ -22,25 +23,26 @@ env:
   TF_WORKING_DIR: infra/env/dev
 
   # Terraform variables downloaded from S3
-  TFVARS_FILE: contact-evaluations-pipeline.tfvars
-  TFVARS_S3_KEY: terraform/dev/af-south-1/contact-evaluations-pipeline.tfvars
+  TFVARS_FILE: flattened-ctr-pipeline.tfvars
+  TFVARS_S3_KEY: terraform/dev/af-south-1/flattened-ctr-pipeline.tfvars
 
   # Terraform plan passed between the plan and apply jobs
   PLAN_FILE: tfplan
-  PLAN_S3_KEY: artifacts/dev/contact-evaluations-pipeline/${{ github.run_id }}/tfplan
+  PLAN_S3_KEY: artifacts/dev/flattened-ctr-pipeline/${{ github.run_id }}/tfplan
 
   # Existing shared Glue network connection resource address
   NETWORK_CONNECTION_RESOURCE_ADDRESS: module.compute.aws_glue_connection.network_connection
 
 
 jobs:
-  # ----------------------------------------------------------
-  # Validate Terraform configuration
-  # ----------------------------------------------------------
+  # ==========================================================
+  # VALIDATE TERRAFORM CONFIGURATION
+  # ==========================================================
+
   validate:
     name: Validate Terraform
 
-    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicedev-dev-afs1-flattened-ctr-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
 
     environment: dev
     timeout-minutes: 30
@@ -92,17 +94,17 @@ jobs:
         run: terraform validate
 
 
-  # ----------------------------------------------------------
-  # Import existing shared network connection,
-  # create and store Terraform plan
-  # ----------------------------------------------------------
+  # ==========================================================
+  # IMPORT CONNECTION AND CREATE TERRAFORM PLAN
+  # ==========================================================
+
   plan:
     name: Import Connection and Terraform Plan
 
     needs:
       - validate
 
-    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicedev-dev-afs1-flattened-ctr-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
 
     environment: dev
     timeout-minutes: 30
@@ -157,10 +159,15 @@ jobs:
       - name: Terraform Init
         run: terraform init -input=false
 
-      # --------------------------------------------------------
+      # Temporary one-time cleanup of the invalid S3 script state.
+      # Remove this step after the first successful deployment.
+      - name: Remove stale CTR script object from Terraform state
+        run: |
+          terraform state rm \
+            'module.compute.aws_s3_object.ctr_flattened_redshift_script'
+
       # Import the existing shared Glue network connection only
       # when it is not already present in this Terraform state.
-      # --------------------------------------------------------
       - name: Import existing shared Glue network connection
         env:
           NETWORK_CONNECTION_IMPORT_ID: ${{ vars.NETWORK_GLUE_CONNECTION_IMPORT_ID }}
@@ -191,7 +198,7 @@ jobs:
 
       - name: Wait before creating Glue job plan
         run: |
-          echo "Waiting 60 seconds before planning the Glue jobs..."
+          echo "Waiting 60 seconds before planning the Glue job..."
           sleep 60
 
       - name: Verify imported network connection
@@ -215,16 +222,17 @@ jobs:
           echo "Terraform plan uploaded successfully."
 
 
-  # ----------------------------------------------------------
-  # Apply the exact Terraform plan generated above
-  # ----------------------------------------------------------
+  # ==========================================================
+  # APPLY THE EXACT TERRAFORM PLAN GENERATED ABOVE
+  # ==========================================================
+
   apply:
     name: Terraform Apply
 
     needs:
       - plan
 
-    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicedev-dev-afs1-flattened-ctr-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
 
     environment: dev
     timeout-minutes: 30
