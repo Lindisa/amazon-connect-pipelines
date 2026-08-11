@@ -1,3 +1,20 @@
+- name: Remove stale CTR script object from Terraform state
+  working-directory: ${{ env.TF_WORKING_DIR }}
+  run: |
+    terraform state rm 'module.compute.aws_s3_object.ctr_flattened_redshift_script'
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ============================================================
 # GLOBAL
 # ============================================================
