@@ -9,7 +9,6 @@ on:
       - synchronize
       - reopened
       - ready_for_review
-
     paths:
       - "infra/env/dev/**"
       - "infra/modules/**"
@@ -24,8 +23,10 @@ concurrency:
 env:
   TF_IN_AUTOMATION: true
   TF_WORKING_DIR: infra/env/dev
-  TFVARS_FILE: contact-evaluations-pipeline.tfvars
-  TFVARS_S3_KEY: terraform/dev/af-south-1/contact-evaluations-pipeline.tfvars
+
+  TFVARS_FILE: flattened-ctr-pipeline.tfvars
+  TFVARS_S3_KEY: terraform/dev/af-south-1/flattened-ctr-pipeline.tfvars
+
 
 jobs:
   terraform-checks:
@@ -33,7 +34,7 @@ jobs:
 
     if: github.event.pull_request.draft == false
 
-    runs-on: codebuild-npsenvoicedev-dev-afs1-contact-evaluations-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-npsenvoicedev-dev-afs1-flattened-ctr-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
 
     environment: dev
     timeout-minutes: 30
@@ -93,6 +94,20 @@ jobs:
             "./${{ env.TFVARS_FILE }}"
 
           test -s "./${{ env.TFVARS_FILE }}"
+
+          echo "Terraform variables file downloaded successfully."
+
+      # Temporary cleanup of the invalid script object state.
+      # Remove this step after DEV applies successfully.
+      - name: Remove stale CTR script object from Terraform state
+        run: |
+          RESOURCE_ADDRESS='module.compute.aws_s3_object.ctr_flattened_redshift_script'
+
+          if terraform state list | grep -Fxq "${RESOURCE_ADDRESS}"; then
+            terraform state rm "${RESOURCE_ADDRESS}"
+          else
+            echo "CTR script object is not present in Terraform state."
+          fi
 
       - name: Terraform plan
         run: |
