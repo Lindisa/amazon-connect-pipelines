@@ -1,3 +1,34 @@
+# ============================================================
+# SECURITY MODULE
+# ============================================================
+
+module "security" {
+  source = "../../modules/security"
+
+  environment     = var.environment
+  resource_prefix = var.resource_prefix
+
+  ############################################################
+  # S3
+  ############################################################
+
+  source_bucket_name = var.source_bucket_name
+  scripts_bucket     = var.glue_scripts_bucket_name
+  temp_bucket        = var.target_bucket_name
+
+  ############################################################
+  # KMS
+  ############################################################
+
+  kms_key_arn                 = var.kms_key_arn
+  s3_script_store_kms_key_arn = var.s3_script_store_kms_key_arn
+}
+
+
+# ============================================================
+# COMPUTE MODULE
+# ============================================================
+
 module "compute" {
   source = "../../modules/compute"
 
@@ -28,6 +59,10 @@ module "compute" {
   ############################################################
 
   network_glue_connection_name = var.network_glue_connection_name
+
+  glue_connection_availability_zone = var.glue_connection_availability_zone
+  glue_connection_subnet_id         = var.glue_connection_subnet_id
+  glue_connection_security_group_ids = var.glue_connection_security_group_ids
 
   ############################################################
   # EXISTING GLUE CATALOG
