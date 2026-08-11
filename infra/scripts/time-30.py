@@ -1,3 +1,35 @@
+-- Verify the latest records loaded and Agent/Queue fields were flattened
+SELECT
+    contact_id,
+    last_update_timestamp,
+    agent_arn,
+    agent_username,
+    agent_routing_profile_name,
+    queue_arn,
+    queue_name,
+    queue_duration,
+    source_file,
+    etl_loaded_timestamp
+FROM public.ctr_flattened
+ORDER BY etl_loaded_timestamp DESC
+LIMIT 100;
+
+
+SELECT
+    contact_id,
+    COUNT(*) AS row_count
+FROM public.ctr_flattened
+GROUP BY contact_id
+HAVING COUNT(*) > 1
+ORDER BY row_count DESC;
+
+
+
+
+
+
+
+
 import sys
 from typing import List, Optional, Tuple
 
