@@ -1,30 +1,3 @@
-default_arguments = {
-  "--enable-metrics"               = "true"
-  "--enable-spark-ui"              = "true"
-  "--enable-auto-scaling"          = "true"
-  "--enable-job-insights"          = "true"
-  "--enable-observability-metrics" = "true"
-  "--enable-glue-datacatalog"      = "true"
-  "--job-bookmark-option"          = "job-bookmark-enable"
-  "--job-language"                 = "python"
-
-  # Arguments required by the updated Python script
-  "--source_database"          = var.glue_catalog_database
-  "--source_table"             = var.glue_catalog_table
-  "--redshift_connection_name" = data.aws_glue_connection.redshift_connection.name
-  "--redshift_tmp_dir"         = "s3://${var.temp_bucket}/connect/${var.environment}/ctr-flattened/redshift-temp/"
-  "--redshift_schema"          = "public"
-  "--target_table"             = var.redshift_target_table
-  "--initial_load"             = "false"
-
-  # Incremental processing and deduplication
-  "--latest_only"              = "true"
-  "--partition_lookback_hours" = "24"
-  "--staging_only"             = "false"
-}
-Use this query to compare each `contact_id` in `public.ctr_flattened` against the latest version in `public.ctr`:
-
-```sql
 WITH ctr_latest AS (
     SELECT
         contact_id,
@@ -41,26 +14,35 @@ flattened AS (
     FROM public.ctr_flattened
     WHERE contact_id IS NOT NULL
     GROUP BY contact_id
+),
+validation AS (
+    SELECT
+        COALESCE(c.contact_id, f.contact_id) AS contact_id,
+        c.expected_latest_timestamp,
+        f.flattened_timestamp,
+        f.flattened_row_count,
+        CASE
+            WHEN c.contact_id IS NULL
+                THEN 'NOT IN CTR'
+            WHEN f.contact_id IS NULL
+                THEN 'MISSING FROM FLATTENED'
+            WHEN f.flattened_row_count > 1
+                THEN 'DUPLICATE IN FLATTENED'
+            WHEN f.flattened_timestamp = c.expected_latest_timestamp
+                THEN 'MATCH - LATEST PRESERVED'
+            ELSE 'TIMESTAMP MISMATCH'
+        END AS validation_status
+    FROM ctr_latest c
+    FULL OUTER JOIN flattened f
+        ON c.contact_id = f.contact_id
 )
 SELECT
-    COALESCE(c.contact_id, f.contact_id) AS contact_id,
-    c.expected_latest_timestamp,
-    f.flattened_timestamp,
-    f.flattened_row_count,
-    CASE
-        WHEN c.contact_id IS NULL
-            THEN 'NOT IN CTR'
-        WHEN f.contact_id IS NULL
-            THEN 'MISSING FROM FLATTENED'
-        WHEN f.flattened_row_count > 1
-            THEN 'DUPLICATE IN FLATTENED'
-        WHEN f.flattened_timestamp = c.expected_latest_timestamp
-            THEN 'MATCH - LATEST PRESERVED'
-        ELSE 'TIMESTAMP MISMATCH'
-    END AS validation_status
-FROM ctr_latest c
-FULL OUTER JOIN flattened f
-    ON c.contact_id = f.contact_id
+    contact_id,
+    expected_latest_timestamp,
+    flattened_timestamp,
+    flattened_row_count,
+    validation_status
+FROM validation
 ORDER BY
     CASE
         WHEN validation_status = 'MATCH - LATEST PRESERVED' THEN 2
