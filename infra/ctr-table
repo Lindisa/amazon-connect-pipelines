@@ -1,3 +1,286 @@
+Run these in both SIT and UAT. They are read-only and demonstrate the pipeline clearly.
+
+## 1. Show table coverage and freshness
+
+```sql
+SELECT
+    'ORIGINAL CTR' AS table_name,
+    COUNT(*) AS total_rows,
+    COUNT(DISTINCT contact_id) AS distinct_contacts,
+    MIN(last_update_timestamp) AS earliest_timestamp,
+    MAX(last_update_timestamp) AS latest_timestamp
+FROM public.ctr
+
+UNION ALL
+
+SELECT
+    'CTR FLATTENED' AS table_name,
+    COUNT(*) AS total_rows,
+    COUNT(DISTINCT contact_id) AS distinct_contacts,
+    MIN(last_update_timestamp) AS earliest_timestamp,
+    MAX(last_update_timestamp) AS latest_timestamp
+FROM public.ctr_flattened;
+```
+
+Explain:
+
+> “The original CTR table can contain multiple versions of a Contact ID, while the flattened table is intended to retain one latest version per Contact ID.”
+
+---
+
+## 2. Main end-to-end validation
+
+```sql
+WITH ctr_latest AS (
+    SELECT
+        contact_id,
+        MAX(last_update_timestamp) AS expected_timestamp
+    FROM public.ctr
+    WHERE contact_id IS NOT NULL
+    GROUP BY contact_id
+),
+flattened AS (
+    SELECT
+        contact_id,
+        COUNT(*) AS row_count,
+        MAX(last_update_timestamp) AS actual_timestamp
+    FROM public.ctr_flattened
+    WHERE contact_id IS NOT NULL
+    GROUP BY contact_id
+),
+validation AS (
+    SELECT
+        c.contact_id,
+        CASE
+            WHEN f.contact_id IS NULL
+                THEN 'MISSING_FROM_FLATTENED'
+            WHEN f.row_count > 1
+                THEN 'DUPLICATE'
+            WHEN f.actual_timestamp <> c.expected_timestamp
+                THEN 'TIMESTAMP_MISMATCH'
+            ELSE 'LATEST_MATCHES'
+        END AS validation_status
+    FROM ctr_latest c
+    LEFT JOIN flattened f
+        ON c.contact_id = f.contact_id
+)
+SELECT
+    validation_status,
+    COUNT(*) AS contact_count
+FROM validation
+GROUP BY validation_status
+ORDER BY validation_status;
+```
+
+Explain:
+
+> “This compares every Contact ID’s latest timestamp in the original table against the flattened table. It also detects missing records and duplicates.”
+
+Expected:
+
+* Majority under `LATEST_MATCHES`
+* No `MISSING_FROM_FLATTENED`
+* No `DUPLICATE`
+* Ideally no timestamp mismatches, or only previously investigated historical exceptions
+
+---
+
+## 3. Confirm one row per Contact ID
+
+```sql
+SELECT
+    contact_id,
+    COUNT(*) AS row_count
+FROM public.ctr_flattened
+WHERE contact_id IS NOT NULL
+GROUP BY contact_id
+HAVING COUNT(*) > 1
+ORDER BY row_count DESC;
+```
+
+Expected: zero rows.
+
+Explain:
+
+> “A zero-row result confirms that the flattened target contains only one current row per Contact ID.”
+
+---
+
+## 4. Show any missing records
+
+```sql
+WITH ctr_latest AS (
+    SELECT
+        contact_id,
+        MAX(last_update_timestamp) AS latest_timestamp
+    FROM public.ctr
+    WHERE contact_id IS NOT NULL
+    GROUP BY contact_id
+)
+SELECT
+    c.contact_id,
+    c.latest_timestamp
+FROM ctr_latest c
+LEFT JOIN public.ctr_flattened f
+    ON c.contact_id = f.contact_id
+WHERE f.contact_id IS NULL
+ORDER BY c.latest_timestamp DESC;
+```
+
+Expected: zero rows.
+
+---
+
+## 5. Show timestamp mismatches, if any
+
+```sql
+WITH ctr_latest AS (
+    SELECT
+        contact_id,
+        MAX(last_update_timestamp) AS expected_timestamp
+    FROM public.ctr
+    WHERE contact_id IS NOT NULL
+    GROUP BY contact_id
+),
+flattened AS (
+    SELECT
+        contact_id,
+        MAX(last_update_timestamp) AS actual_timestamp
+    FROM public.ctr_flattened
+    WHERE contact_id IS NOT NULL
+    GROUP BY contact_id
+)
+SELECT
+    c.contact_id,
+    c.expected_timestamp AS original_latest_timestamp,
+    f.actual_timestamp AS flattened_timestamp,
+    DATEDIFF(
+        second,
+        c.expected_timestamp,
+        f.actual_timestamp
+    ) AS timestamp_difference_seconds
+FROM ctr_latest c
+JOIN flattened f
+    ON c.contact_id = f.contact_id
+WHERE c.expected_timestamp <> f.actual_timestamp
+ORDER BY ABS(
+    DATEDIFF(
+        second,
+        c.expected_timestamp,
+        f.actual_timestamp
+    )
+) DESC;
+```
+
+A positive difference means the flattened timestamp is later. A negative difference means flattened is behind.
+
+---
+
+## 6. Demonstrate latest-version selection
+
+This finds Contact IDs that have multiple original versions and compares them with the single flattened version:
+
+```sql
+WITH multi_version_contacts AS (
+    SELECT
+        contact_id,
+        COUNT(*) AS original_version_count,
+        MAX(last_update_timestamp) AS expected_latest_timestamp
+    FROM public.ctr
+    WHERE contact_id IS NOT NULL
+    GROUP BY contact_id
+    HAVING COUNT(*) > 1
+)
+SELECT
+    m.contact_id,
+    m.original_version_count,
+    m.expected_latest_timestamp,
+    f.last_update_timestamp AS flattened_timestamp,
+    CASE
+        WHEN f.last_update_timestamp = m.expected_latest_timestamp
+            THEN 'LATEST VERSION RETAINED'
+        ELSE 'CHECK REQUIRED'
+    END AS result
+FROM multi_version_contacts m
+JOIN public.ctr_flattened f
+    ON m.contact_id = f.contact_id
+ORDER BY m.original_version_count DESC
+LIMIT 20;
+```
+
+This is a good demo query because it visibly proves the purpose of the pipeline.
+
+---
+
+## 7. Display flattened fields
+
+```sql
+SELECT
+    contact_id,
+    channel,
+    initiation_method,
+    initiation_timestamp,
+    disconnect_timestamp,
+    agent_username,
+    agent_routing_profile_name,
+    queue_name,
+    queue_duration,
+    customer_endpoint_type,
+    system_endpoint_type,
+    last_update_timestamp,
+    source_file,
+    etl_loaded_timestamp
+FROM public.ctr_flattened
+ORDER BY last_update_timestamp DESC
+LIMIT 20;
+```
+
+Explain:
+
+> “Nested Agent, Queue and Endpoint structures have been converted into ordinary reporting columns, making the data easier to use in Redshift and QuickSight.”
+
+---
+
+## 8. Show null handling for optional structures
+
+```sql
+SELECT
+    COUNT(*) AS total_contacts,
+    SUM(CASE WHEN agent_arn IS NULL THEN 1 ELSE 0 END)
+        AS contacts_without_agent,
+    SUM(CASE WHEN queue_arn IS NULL THEN 1 ELSE 0 END)
+        AS contacts_without_queue,
+    SUM(
+        CASE
+            WHEN agent_arn IS NULL AND queue_arn IS NULL
+            THEN 1 ELSE 0
+        END
+    ) AS contacts_without_agent_or_queue
+FROM public.ctr_flattened;
+```
+
+Explain:
+
+> “Agent and Queue are optional for some contact types. The job retains those contacts and safely represents unavailable structures as null instead of dropping the record.”
+
+---
+
+## Recommended demo order
+
+Run:
+
+1. Table coverage.
+2. Main validation.
+3. Duplicate check.
+4. Latest-version selection.
+5. Flattened field sample.
+6. Null-handling summary.
+7. Mismatch details only if the main validation reports mismatches.
+
+That tells the story without getting stuck in too many separate checks.
+
+
+
 lookback_hours = 4
 initial_load = (
     get_optional_arg("initial_load", "false").lower() == "true"
