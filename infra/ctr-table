@@ -1,3 +1,18 @@
+SELECT
+    'MAIN CTR' AS table_name,
+    MAX(last_update_timestamp) AS latest_timestamp
+FROM public.ctr
+
+UNION ALL
+
+SELECT
+    'CTR FLATTENED' AS table_name,
+    MAX(last_update_timestamp) AS latest_timestamp
+FROM public.ctr_flattened;
+
+
+
+
 Run this first. It checks for missing contacts, duplicates and timestamp mismatches against the latest version in `public.ctr`:
 
 ```sql
