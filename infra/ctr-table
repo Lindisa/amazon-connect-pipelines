@@ -1,3 +1,28 @@
+lookback_hours = 4
+initial_load = (
+    get_optional_arg("initial_load", "false").lower() == "true"
+)
+
+if not initial_load:
+    print("Performing a controlled backfill...")
+
+    now = datetime.now()
+    start = datetime(2026, 8, 4, 0, 0, 0)
+
+    print(f"Backfill start: {start}")
+    print(f"Backfill end: {now}")
+
+    predicate = f"""
+    (
+        year = {start.year}
+        AND month = {start.month}
+        AND day >= {start.day}
+        AND day <= {now.day}
+    )
+    """
+
+
+
 SELECT
     'MAIN CTR' AS table_name,
     MAX(last_update_timestamp) AS latest_timestamp
