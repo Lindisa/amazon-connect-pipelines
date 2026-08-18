@@ -1,301 +1,95 @@
-SELECT
-    table_name,
-    column_name,
-    data_type,
-    datetime_precision
-FROM information_schema.columns
-WHERE table_schema = 'public'
-  AND table_name IN ('ctr', 'ctr_flattened')
-  AND column_name = 'last_update_timestamp'
-ORDER BY table_name;
+Run this first. It checks for missing contacts, duplicates and timestamp mismatches against the latest version in `public.ctr`:
 
-
-
-
-
-UPDATE public.ctr_flattened AS f
-SET last_update_timestamp = c.latest_ctr_timestamp
-FROM (
+```sql
+WITH ctr_latest AS (
     SELECT
         contact_id,
-        MAX(last_update_timestamp) AS latest_ctr_timestamp
+        MAX(last_update_timestamp) AS expected_timestamp
     FROM public.ctr
+    WHERE contact_id IS NOT NULL
     GROUP BY contact_id
-) c
-WHERE f.contact_id = c.contact_id
-  AND f.last_update_timestamp <> c.latest_ctr_timestamp;
-
-
-
-
+),
+flattened AS (
+    SELECT
+        contact_id,
+        COUNT(*) AS row_count,
+        MAX(last_update_timestamp) AS actual_timestamp
+    FROM public.ctr_flattened
+    WHERE contact_id IS NOT NULL
+    GROUP BY contact_id
+),
+validation AS (
+    SELECT
+        c.contact_id,
+        CASE
+            WHEN f.contact_id IS NULL
+                THEN 'MISSING_FROM_FLATTENED'
+            WHEN f.row_count > 1
+                THEN 'DUPLICATE'
+            WHEN f.actual_timestamp <> c.expected_timestamp
+                THEN 'TIMESTAMP_MISMATCH'
+            ELSE 'LATEST_MATCHES'
+        END AS validation_status
+    FROM ctr_latest c
+    LEFT JOIN flattened f
+        ON c.contact_id = f.contact_id
+)
 SELECT
-    f.contact_id,
-    f.agent_arn AS flattened_agent_arn,
-    c.ctr_agent_arn,
-    f.queue_arn AS flattened_queue_arn,
-    c.ctr_queue_arn
-FROM public.ctr_flattened f
-JOIN (
+    validation_status,
+    COUNT(*) AS contact_count
+FROM validation
+GROUP BY validation_status
+ORDER BY validation_status;
+```
+
+What you want:
+
+* `MISSING_FROM_FLATTENED`: absent or `0`
+* `DUPLICATE`: absent or `0`
+* `TIMESTAMP_MISMATCH`: ideally `0`
+* `LATEST_MATCHES`: all expected contacts
+
+Then verify the latest available record and when the initial load wrote it:
+
+```sql
+SELECT
+    COUNT(*) AS total_rows,
+    COUNT(DISTINCT contact_id) AS distinct_contacts,
+    MIN(last_update_timestamp) AS earliest_ctr,
+    MAX(last_update_timestamp) AS latest_ctr,
+    MAX(etl_loaded_timestamp) AS latest_etl_load
+FROM public.ctr_flattened;
+```
+
+Finally, compare recent daily coverage:
+
+```sql
+WITH original_daily AS (
     SELECT
-        contact_id,
-        ctr_agent_arn,
-        ctr_queue_arn
-    FROM (
-        SELECT
-            contact_id,
-            JSON_EXTRACT_PATH_TEXT(
-                JSON_SERIALIZE(agent),
-                'ARN',
-                true
-            ) AS ctr_agent_arn,
-            JSON_EXTRACT_PATH_TEXT(
-                JSON_SERIALIZE(queue),
-                'ARN',
-                true
-            ) AS ctr_queue_arn,
-            ROW_NUMBER() OVER (
-                PARTITION BY contact_id
-                ORDER BY last_update_timestamp DESC
-            ) AS rn
-        FROM public.ctr
-    ) ranked_ctr
-    WHERE rn = 1
-) c
-    ON c.contact_id = f.contact_id
-WHERE
-    (
-        f.agent_arn IS NULL
-        AND NULLIF(TRIM(c.ctr_agent_arn), '') IS NOT NULL
-    )
-    OR
-    (
-        f.queue_arn IS NULL
-        AND NULLIF(TRIM(c.ctr_queue_arn), '') IS NOT NULL
-    );
-
-
-
-    SELECT
-        contact_id,
-        last_update_timestamp,
-        JSON_EXTRACT_PATH_TEXT(
-            JSON_SERIALIZE(agent),
-            'ARN',
-            true
-        ) AS ctr_agent_arn,
-        JSON_EXTRACT_PATH_TEXT(
-            JSON_SERIALIZE(queue),
-            'ARN',
-            true
-        ) AS ctr_queue_arn,
-        ROW_NUMBER() OVER (
-            PARTITION BY contact_id
-            ORDER BY last_update_timestamp DESC
-        ) AS row_num
+        CAST(last_update_timestamp AS DATE) AS record_date,
+        COUNT(DISTINCT contact_id) AS original_contacts
     FROM public.ctr
+    WHERE last_update_timestamp >= DATEADD(day, -14, GETDATE())
+    GROUP BY CAST(last_update_timestamp AS DATE)
+),
+flattened_daily AS (
+    SELECT
+        CAST(last_update_timestamp AS DATE) AS record_date,
+        COUNT(DISTINCT contact_id) AS flattened_contacts
+    FROM public.ctr_flattened
+    WHERE last_update_timestamp >= DATEADD(day, -14, GETDATE())
+    GROUP BY CAST(last_update_timestamp AS DATE)
 )
 SELECT
-    f.contact_id,
-    f.agent_arn AS flattened_agent_arn,
-    c.ctr_agent_arn,
-    f.queue_arn AS flattened_queue_arn,
-    c.ctr_queue_arn
-FROM public.ctr_flattened f
-JOIN latest_ctr c
-    ON c.contact_id = f.contact_id
-   AND c.row_num = 1
-WHERE
-    (
-        f.agent_arn IS NULL
-        AND NULLIF(TRIM(c.ctr_agent_arn), '') IS NOT NULL
-    )
-    OR
-    (
-        f.queue_arn IS NULL
-        AND NULLIF(TRIM(c.ctr_queue_arn), '') IS NOT NULL
-    );
+    COALESCE(o.record_date, f.record_date) AS record_date,
+    COALESCE(o.original_contacts, 0) AS original_contacts,
+    COALESCE(f.flattened_contacts, 0) AS flattened_contacts,
+    COALESCE(o.original_contacts, 0)
+        - COALESCE(f.flattened_contacts, 0) AS difference
+FROM original_daily o
+FULL OUTER JOIN flattened_daily f
+    ON o.record_date = f.record_date
+ORDER BY record_date DESC;
+```
 
-
-
-
-
-
-SELECT
-    f.contact_id,
-    f.last_update_timestamp AS flattened_timestamp,
-    MAX(c.last_update_timestamp) AS latest_ctr_timestamp
-FROM public.ctr_flattened f
-JOIN public.ctr c
-    ON c.contact_id = f.contact_id
-GROUP BY
-    f.contact_id,
-    f.last_update_timestamp
-HAVING f.last_update_timestamp <> MAX(c.last_update_timestamp);
-
-
-
-
-
-DROP TABLE IF EXISTS public.ctr_flattened_staging;
-DROP TABLE IF EXISTS public.ctr_flattened;
-
-CREATE TABLE public.ctr_flattened
-(
-    aws_account_id                              VARCHAR(65535),
-    aws_contact_trace_record_format_version     VARCHAR(65535),
-
-    contact_id                                  VARCHAR(65535) NOT NULL,
-    contact_association_id                      VARCHAR(65535),
-    initial_contact_id                          VARCHAR(65535),
-    previous_contact_id                         VARCHAR(65535),
-    next_contact_id                             VARCHAR(65535),
-    related_contact_id                          VARCHAR(65535),
-
-    instance_arn                                VARCHAR(65535),
-    channel                                     VARCHAR(65535),
-    initiation_method                           VARCHAR(65535),
-    disconnect_reason                           VARCHAR(65535),
-    answering_machine_detection_status          VARCHAR(65535),
-
-    agent_connection_attempts                   BIGINT,
-
-    initiation_timestamp                        TIMESTAMP,
-    connected_to_system_timestamp               TIMESTAMP,
-    disconnect_timestamp                        TIMESTAMP,
-    scheduled_timestamp                         TIMESTAMP,
-    transfer_completed_timestamp                TIMESTAMP,
-    last_update_timestamp                       TIMESTAMP,
-
-    agent_arn                                   VARCHAR(65535),
-    agent_active_region                         VARCHAR(65535),
-    agent_username                              VARCHAR(65535),
-    agent_after_contact_work_duration           BIGINT,
-    agent_after_contact_work_start_timestamp    TIMESTAMP,
-    agent_after_contact_work_end_timestamp      TIMESTAMP,
-    agent_initiated_hold_duration               BIGINT,
-    agent_interaction_duration                  BIGINT,
-    agent_connected_to_agent_timestamp          TIMESTAMP,
-    agent_customer_hold_duration                BIGINT,
-    agent_longest_hold_duration                 BIGINT,
-    agent_number_of_holds                       BIGINT,
-    agent_voice_enhancement_mode                VARCHAR(65535),
-    agent_device_operating_system               VARCHAR(65535),
-    agent_device_platform_name                  VARCHAR(65535),
-    agent_device_platform_version               VARCHAR(65535),
-    agent_routing_profile_arn                   VARCHAR(65535),
-    agent_routing_profile_name                  VARCHAR(65535),
-
-    campaign_id                                 VARCHAR(65535),
-
-    customer_endpoint_address                   VARCHAR(65535),
-    customer_endpoint_type                      VARCHAR(65535),
-    system_endpoint_address                     VARCHAR(65535),
-    system_endpoint_type                        VARCHAR(65535),
-    transferred_to_endpoint_address             VARCHAR(65535),
-    transferred_to_endpoint_type                VARCHAR(65535),
-
-    queue_arn                                   VARCHAR(65535),
-    queue_name                                  VARCHAR(65535),
-    queue_duration                              BIGINT,
-    queue_enqueue_timestamp                     TIMESTAMP,
-    queue_dequeue_timestamp                     TIMESTAMP,
-
-    recording_deletion_reason                   VARCHAR(65535),
-    recording_location                          VARCHAR(65535),
-    recording_status                            VARCHAR(65535),
-    recording_type                              VARCHAR(65535),
-
-    contact_lens_enabled                        BOOLEAN,
-    contact_lens_language_locale                VARCHAR(65535),
-    contact_lens_redaction_behavior             VARCHAR(65535),
-    contact_lens_redaction_mask_mode            VARCHAR(65535),
-    contact_lens_redaction_policy               VARCHAR(65535),
-    contact_lens_sentiment_behavior             VARCHAR(65535),
-
-    quality_agent_audio_score                   DOUBLE PRECISION,
-    quality_customer_audio_score                DOUBLE PRECISION,
-
-    attribute_analytics_provider                VARCHAR(65535),
-    attribute_caller_cif_key                    VARCHAR(65535),
-    attribute_caller_id_number                  VARCHAR(65535),
-    attribute_caller_id_type                    VARCHAR(65535),
-    attribute_caller_name                       VARCHAR(65535),
-    attribute_caller_phone_number               VARCHAR(65535),
-    attribute_contact_flow_id                   VARCHAR(65535),
-    attribute_context_manager_session_id        VARCHAR(65535),
-    attribute_customer_number                   VARCHAR(65535),
-    attribute_is_analytics_enabled              VARCHAR(65535),
-    attribute_is_authenticated                  VARCHAR(65535),
-    attribute_is_chat_analytics_enabled         VARCHAR(65535),
-    attribute_is_identified                     VARCHAR(65535),
-    attribute_is_screen_recording_enabled       VARCHAR(65535),
-    attribute_is_speech_analytics_enabled       VARCHAR(65535),
-    attribute_is_survey_enabled                 VARCHAR(65535),
-    attribute_survey_id                         VARCHAR(65535),
-    attribute_account_no                        VARCHAR(65535),
-    attribute_all_linked_accounts               VARCHAR(65535),
-    attribute_chosen_account_object             VARCHAR(65535),
-    attribute_cif_key                           VARCHAR(65535),
-    attribute_client_group                      VARCHAR(65535),
-    attribute_contact_flow_name                 VARCHAR(65535),
-    attribute_customer_id                       VARCHAR(65535),
-    attribute_eval_return_code                  VARCHAR(65535),
-    attribute_from_telephone_banking            VARCHAR(65535),
-    attribute_home_language_code                VARCHAR(65535),
-    attribute_id_number                         VARCHAR(65535),
-    attribute_pin_type                          VARCHAR(65535),
-    attribute_registration_status               VARCHAR(65535),
-    attribute_sbu_segment                       VARCHAR(65535),
-    attribute_send_to                           VARCHAR(65535),
-    attribute_status_fica                       VARCHAR(65535),
-    attribute_fic_complete                      VARCHAR(65535),
-
-    call_data_default_ani                       VARCHAR(65535),
-    call_data_cif_key                           VARCHAR(65535),
-    call_data_id_number                         VARCHAR(65535),
-    call_data_connection_status                 VARCHAR(65535),
-    call_data_source_no                         VARCHAR(65535),
-    call_data_destination_no                    VARCHAR(65535),
-    call_data_queue_name                        VARCHAR(65535),
-    call_data_connection_id                     VARCHAR(65535),
-    call_data_context_id                        VARCHAR(65535),
-    call_data_is_identified                     VARCHAR(65535),
-    call_data_is_authenticated                  VARCHAR(65535),
-
-    tag_billing_cost_center                     VARCHAR(65535),
-    tag_billing_department                      VARCHAR(65535),
-    tag_billing_division                        VARCHAR(65535),
-    tag_speech_analytics                        VARCHAR(65535),
-    tag_aws_connect_instance_id                 VARCHAR(65535),
-    tag_aws_connect_system_endpoint             VARCHAR(65535),
-
-    segment_connect_subtype                     VARCHAR(65535),
-    segment_purpose_analytics_reference         VARCHAR(65535),
-    segment_purpose_contact_search_reference    VARCHAR(65535),
-
-    last_paused_timestamp                       TIMESTAMP,
-    last_resumed_timestamp                      TIMESTAMP,
-    total_pause_count                           BIGINT,
-    total_pause_duration_in_seconds             BIGINT,
-
-    agent_hierarchy_groups                      SUPER,
-    agent_state_transitions                     SUPER,
-    contact_lens_analytics_modes                SUPER,
-    contact_lens_redaction_entities             SUPER,
-    contact_lens_summary_configuration          SUPER,
-    quality_agent_audio_issues                  SUPER,
-    quality_customer_audio_issues               SUPER,
-    media_streams                               SUPER,
-    recordings                                  SUPER,
-    references_data                             SUPER,
-
-    source_file                                 VARCHAR(65535),
-    etl_loaded_timestamp                        TIMESTAMP DEFAULT GETDATE()
-)
-DISTSTYLE AUTO
-SORTKEY (contact_id, last_update_timestamp);
-
-CREATE TABLE public.ctr_flattened_staging
-(
-    LIKE public.ctr_flattened
-);
+The first query is the decisive skipped-data check. Don’t send the update until we see its output.
