@@ -1,4 +1,19 @@
 SELECT
+    contact_id,
+    attributes,
+    attribute_client_group
+FROM public.ctr
+WHERE contact_id IN (
+    SELECT contact_id
+    FROM public.ctr_flattened
+    WHERE LENGTH(TRIM(attribute_client_group)) = 1
+)
+ORDER BY last_update_timestamp DESC;
+
+
+
+
+SELECT
     attribute_client_group,
     LENGTH(attribute_client_group) AS value_length,
     ASCII(attribute_client_group) AS ascii_code
