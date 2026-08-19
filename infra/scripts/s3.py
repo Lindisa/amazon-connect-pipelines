@@ -1,3 +1,5 @@
+BEGIN;
+
 ALTER TABLE public.ctr_flattened_staging
 ADD COLUMN agent_hierarchy_level_1_group_name VARCHAR(65535);
 
@@ -12,6 +14,41 @@ ADD COLUMN agent_hierarchy_level_4_group_name VARCHAR(65535);
 
 ALTER TABLE public.ctr_flattened_staging
 ADD COLUMN agent_hierarchy_level_5_group_name VARCHAR(65535);
+
+ALTER TABLE public.ctr_flattened
+ADD COLUMN agent_hierarchy_level_1_group_name VARCHAR(65535);
+
+ALTER TABLE public.ctr_flattened
+ADD COLUMN agent_hierarchy_level_2_group_name VARCHAR(65535);
+
+ALTER TABLE public.ctr_flattened
+ADD COLUMN agent_hierarchy_level_3_group_name VARCHAR(65535);
+
+ALTER TABLE public.ctr_flattened
+ADD COLUMN agent_hierarchy_level_4_group_name VARCHAR(65535);
+
+ALTER TABLE public.ctr_flattened
+ADD COLUMN agent_hierarchy_level_5_group_name VARCHAR(65535);
+
+COMMIT;
+
+
+SELECT
+    table_name,
+    column_name,
+    ordinal_position
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name IN (
+      'ctr_flattened',
+      'ctr_flattened_staging'
+  )
+  AND column_name LIKE 'agent_hierarchy_level_%'
+ORDER BY table_name, ordinal_position;
+
+
+
+
 
 import sys
 from datetime import datetime, timedelta, timezone
