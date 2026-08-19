@@ -1,19 +1,106 @@
-git checkout dev
-git pull origin dev
-
-git checkout -b pr
-git push -u origin pr
-
-git checkout dev
-git checkout -b sit
-git push -u origin sit
-
-git checkout dev
-git checkout -b uat
-git push -u origin uat
-
-git checkout dev
-git checkout -b prod
-git push -u origin prod
-
-git checkout dev
+SELECT
+    column_name,
+    COUNT(*) AS empty_value_count
+FROM public.ctr_flattened
+UNPIVOT (
+    column_value FOR column_name IN (
+        aws_account_id,
+        aws_contact_trace_record_format_version,
+        contact_id,
+        contact_association_id,
+        initial_contact_id,
+        previous_contact_id,
+        next_contact_id,
+        related_contact_id,
+        instance_arn,
+        channel,
+        initiation_method,
+        disconnect_reason,
+        answering_machine_detection_status,
+        agent_arn,
+        agent_active_region,
+        agent_username,
+        agent_voice_enhancement_mode,
+        agent_device_operating_system,
+        agent_device_platform_name,
+        agent_device_platform_version,
+        agent_routing_profile_arn,
+        agent_routing_profile_name,
+        campaign_id,
+        customer_endpoint_address,
+        customer_endpoint_type,
+        system_endpoint_address,
+        system_endpoint_type,
+        transferred_to_endpoint_address,
+        transferred_to_endpoint_type,
+        queue_arn,
+        queue_name,
+        recording_deletion_reason,
+        recording_location,
+        recording_status,
+        recording_type,
+        contact_lens_language_locale,
+        contact_lens_redaction_behavior,
+        contact_lens_redaction_mask_mode,
+        contact_lens_redaction_policy,
+        contact_lens_sentiment_behavior,
+        attribute_analytics_provider,
+        attribute_caller_cif_key,
+        attribute_caller_id_number,
+        attribute_caller_id_type,
+        attribute_caller_name,
+        attribute_caller_phone_number,
+        attribute_contact_flow_id,
+        attribute_context_manager_session_id,
+        attribute_customer_number,
+        attribute_is_analytics_enabled,
+        attribute_is_authenticated,
+        attribute_is_chat_analytics_enabled,
+        attribute_is_identified,
+        attribute_is_screen_recording_enabled,
+        attribute_is_speech_analytics_enabled,
+        attribute_is_survey_enabled,
+        attribute_survey_id,
+        attribute_account_no,
+        attribute_all_linked_accounts,
+        attribute_chosen_account_object,
+        attribute_cif_key,
+        attribute_client_group,
+        attribute_contact_flow_name,
+        attribute_customer_id,
+        attribute_eval_return_code,
+        attribute_from_telephone_banking,
+        attribute_home_language_code,
+        attribute_id_number,
+        attribute_pin_type,
+        attribute_registration_status,
+        attribute_sbu_segment,
+        attribute_send_to,
+        attribute_status_fica,
+        attribute_fic_complete,
+        call_data_default_ani,
+        call_data_cif_key,
+        call_data_id_number,
+        call_data_connection_status,
+        call_data_source_no,
+        call_data_destination_no,
+        call_data_queue_name,
+        call_data_connection_id,
+        call_data_context_id,
+        call_data_is_identified,
+        call_data_is_authenticated,
+        tag_billing_cost_center,
+        tag_billing_department,
+        tag_billing_division,
+        tag_speech_analytics,
+        tag_aws_connect_instance_id,
+        tag_aws_connect_system_endpoint,
+        segment_connect_subtype,
+        segment_purpose_analytics_reference,
+        segment_purpose_contact_search_reference,
+        source_file
+    )
+)
+WHERE TRIM(column_value) = ''
+GROUP BY column_name
+ORDER BY empty_value_count DESC, column_name;
