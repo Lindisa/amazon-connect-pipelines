@@ -1,3 +1,15 @@
+SELECT
+    column_name,
+    ordinal_position
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'ctr_flattened_staging'
+  AND column_name LIKE 'agent_hierarchy_level_%'
+ORDER BY ordinal_position;
+
+
+
+
 BEGIN;
 
 ALTER TABLE public.ctr_flattened_staging
