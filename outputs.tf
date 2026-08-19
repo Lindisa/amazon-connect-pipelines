@@ -1,27 +1,3 @@
-terraform import -var-file="contact-evaluations-pipeline.tfvars" "module.compute.aws_glue_security_configuration.ce_sec_config" "npsenvoicedev-dev-afs1-ce-sec-config"
+Hi Salesh, I’ve updated the CTR flattened script to expand the agent hierarchy levels into separate columns for QuickSight. I also added handling for missing, invalid and empty values so they are stored as `NULL`, recreated the DEV tables, completed the initial load and validated the hierarchy fields successfully.
 
-terraform import -var-file="contact-evaluations-pipeline.tfvars" "module.compute.aws_glue_crawler.ce_crawler" "npsenvoicedev-dev-afs1-ce-crawler"
-
-      - name: Import existing Glue security configuration
-        run: |
-          terraform import \
-            -input=false \
-            -var-file="${{ env.TFVARS_FILE }}" \
-            "module.compute.aws_glue_security_configuration.ce_sec_config" \
-            "npsenvoicedev-dev-afs1-ce-sec-config" || true
-
-      - name: Import existing Glue crawler
-        run: |
-          terraform import \
-            -input=false \
-            -var-file="${{ env.TFVARS_FILE }}" \
-            "module.compute.aws_glue_crawler.ce_crawler" \
-            "npsenvoicedev-dev-afs1-ce-crawler" || true
-
-git rm --cached infra/env/dev/*.tfvars
-git rm --cached infra/env/sit/*.tfvars
-git rm --cached infra/env/uat/*.tfvars
-
-git add .gitignore
-git commit -m "Stop tracking environment tfvars files"
-git push
+I’ll be away for a while as I need to collect a laptop charger from the Randburg office.
