@@ -1,92 +1,17 @@
-WITH latest_ctr AS (
-    SELECT
-        contact_id,
-        attributes,
-        last_update_timestamp,
-        ROW_NUMBER() OVER (
-            PARTITION BY contact_id
-            ORDER BY last_update_timestamp DESC
-        ) AS rn
-    FROM public.ctr
-)
-SELECT
-    c.contact_id,
-    JSON_EXTRACT_PATH_TEXT(
-        JSON_SERIALIZE(c.attributes),
-        'clientGroup'
-    ) AS source_client_group,
-    f.attribute_client_group AS flattened_client_group,
-    CASE
-        WHEN JSON_EXTRACT_PATH_TEXT(
-                 JSON_SERIALIZE(c.attributes),
-                 'clientGroup'
-             ) = f.attribute_client_group
-        THEN 'MATCH'
-        ELSE 'MISMATCH'
-    END AS validation_status
-FROM latest_ctr AS c
-JOIN public.ctr_flattened AS f
-    ON c.contact_id = f.contact_id
-WHERE c.rn = 1
-  AND LENGTH(TRIM(f.attribute_client_group)) = 1
-ORDER BY c.last_update_timestamp DESC;
+ALTER TABLE public.ctr_flattened_staging
+ADD COLUMN agent_hierarchy_level_1_group_name VARCHAR(65535);
 
+ALTER TABLE public.ctr_flattened_staging
+ADD COLUMN agent_hierarchy_level_2_group_name VARCHAR(65535);
 
-SELECT
-    c.contact_id,
-    JSON_EXTRACT_PATH_TEXT(
-        JSON_SERIALIZE(c.attributes),
-        'ClientGroup'
-    ) AS source_client_group,
-    f.attribute_client_group AS flattened_client_group,
-    CASE
-        WHEN JSON_EXTRACT_PATH_TEXT(
-                 JSON_SERIALIZE(c.attributes),
-                 'ClientGroup'
-             ) = f.attribute_client_group
-        THEN 'MATCH'
-        ELSE 'MISMATCH'
-    END AS validation_status
-FROM public.ctr AS c
-JOIN public.ctr_flattened AS f
-    ON c.contact_id = f.contact_id
-WHERE LENGTH(TRIM(f.attribute_client_group)) = 1
-ORDER BY c.last_update_timestamp DESC;
+ALTER TABLE public.ctr_flattened_staging
+ADD COLUMN agent_hierarchy_level_3_group_name VARCHAR(65535);
 
+ALTER TABLE public.ctr_flattened_staging
+ADD COLUMN agent_hierarchy_level_4_group_name VARCHAR(65535);
 
-SELECT
-    c.contact_id,
-    c.attributes,
-    f.attribute_client_group
-FROM public.ctr AS c
-JOIN public.ctr_flattened AS f
-    ON c.contact_id = f.contact_id
-WHERE LENGTH(TRIM(f.attribute_client_group)) = 1
-ORDER BY c.last_update_timestamp DESC;
-
-
-SELECT
-    contact_id,
-    attributes,
-    attribute_client_group
-FROM public.ctr
-WHERE contact_id IN (
-    SELECT contact_id
-    FROM public.ctr_flattened
-    WHERE LENGTH(TRIM(attribute_client_group)) = 1
-)
-ORDER BY last_update_timestamp DESC;
-
-
-
-
-SELECT
-    attribute_client_group,
-    LENGTH(attribute_client_group) AS value_length,
-    ASCII(attribute_client_group) AS ascii_code
-FROM public.ctr_flattened
-WHERE attribute_client_group IS NOT NULL
-  AND LENGTH(TRIM(attribute_client_group)) = 1;
+ALTER TABLE public.ctr_flattened_staging
+ADD COLUMN agent_hierarchy_level_5_group_name VARCHAR(65535);
 
 import sys
 from datetime import datetime, timedelta, timezone
@@ -102,6 +27,7 @@ from pyspark import StorageLevel
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import (
     col,
+    coalesce,
     current_timestamp,
     from_json,
     get_json_object,
@@ -206,7 +132,7 @@ job.init(args["JOB_NAME"], args)
 
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 spark.conf.set("spark.sql.legacy.timeParserPolicy", "CORRECTED")
-# Invalid casts must produce NULL instead of failing the load.
+# Invalid scalar casts must return NULL instead of failing the load.
 spark.conf.set("spark.sql.ansi.enabled", "false")
 
 
@@ -364,6 +290,13 @@ all_target_columns = [
     "last_resumed_timestamp",
     "total_pause_count",
     "total_pause_duration_in_seconds",
+
+    # Agent hierarchy fields exposed as scalar columns for QuickSight
+    "agent_hierarchy_level_1_group_name",
+    "agent_hierarchy_level_2_group_name",
+    "agent_hierarchy_level_3_group_name",
+    "agent_hierarchy_level_4_group_name",
+    "agent_hierarchy_level_5_group_name",
 
     # Multi-valued fields retained as SUPER
     "agent_hierarchy_groups",
@@ -534,9 +467,6 @@ def value_or_null(
     source_value = col(actual_path)
     source_text = trim(source_value.cast("string"))
 
-    # Treat source NULLs, empty strings and whitespace-only strings as NULL.
-    # With ANSI mode disabled above, invalid numeric/boolean casts also become
-    # NULL instead of stopping the Glue job.
     if spark_type.lower() == "string":
         return when(
             source_value.isNull() | (source_text == ""),
@@ -609,7 +539,6 @@ def native_complex_or_null(
         )
 
     if not isinstance(data_type, (StructType, ArrayType, MapType)):
-        # The field exists but has an unexpected/invalid source type.
         return from_json(
             lit(None).cast("string"),
             MapType(StringType(), StringType()),
@@ -621,12 +550,34 @@ def native_complex_or_null(
 def json_key_value(json_expression, key_name: str):
     escaped_key = key_name.replace("'", "\\'")
 
-    return text_or_null(
-        get_json_object(
-            json_expression,
-            f"$['{escaped_key}']",
-        )
+    extracted_value = get_json_object(
+        json_expression,
+        f"$['{escaped_key}']",
     )
+
+    return text_or_null(extracted_value)
+
+
+def hierarchy_group_name_or_null(
+    hierarchy_json_expression,
+    level_number: int,
+):
+    """
+    Extract GroupName for Level1..Level5 from Agent.HierarchyGroups.
+
+    Glue may expose HierarchyGroups either as a JSON object or as a
+    single-element array containing that object, so support both shapes.
+    """
+    object_value = get_json_object(
+        hierarchy_json_expression,
+        f"$.Level{level_number}.GroupName",
+    )
+    array_value = get_json_object(
+        hierarchy_json_expression,
+        f"$[0].Level{level_number}.GroupName",
+    )
+
+    return text_or_null(coalesce(object_value, array_value))
 
 
 # ============================================================
@@ -638,6 +589,10 @@ tags_json = json_text_or_null(source_df, "Tags")
 segment_attributes_json = json_text_or_null(
     source_df,
     "SegmentAttributes",
+)
+agent_hierarchy_groups_json = json_text_or_null(
+    source_df,
+    "Agent.HierarchyGroups",
 )
 
 call_data_json = json_key_value(attributes_json, "callData")
@@ -678,7 +633,7 @@ if DEBUG_CONTACT_ID:
             source_df,
             "Queue",
         ).alias("queue_source_json"),
-        text_or_null(col("_source_file")).alias("source_file"),
+        col("_source_file").alias("source_file"),
     ).orderBy(
         "last_update_timestamp",
         "source_file",
@@ -1140,6 +1095,33 @@ flattened_df = source_df.select(
         "TotalPauseDurationInSeconds",
         "long",
     ).alias("total_pause_duration_in_seconds"),
+
+    # Scalar hierarchy columns for QuickSight. Missing hierarchy levels,
+    # missing GroupName keys and blank values are written as NULL.
+    hierarchy_group_name_or_null(
+        agent_hierarchy_groups_json,
+        1,
+    ).alias("agent_hierarchy_level_1_group_name"),
+
+    hierarchy_group_name_or_null(
+        agent_hierarchy_groups_json,
+        2,
+    ).alias("agent_hierarchy_level_2_group_name"),
+
+    hierarchy_group_name_or_null(
+        agent_hierarchy_groups_json,
+        3,
+    ).alias("agent_hierarchy_level_3_group_name"),
+
+    hierarchy_group_name_or_null(
+        agent_hierarchy_groups_json,
+        4,
+    ).alias("agent_hierarchy_level_4_group_name"),
+
+    hierarchy_group_name_or_null(
+        agent_hierarchy_groups_json,
+        5,
+    ).alias("agent_hierarchy_level_5_group_name"),
 
     # Genuinely multi-valued fields retained as SUPER
     native_complex_or_null(
