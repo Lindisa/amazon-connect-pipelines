@@ -1,5 +1,27 @@
 SELECT
     c.contact_id,
+    JSON_EXTRACT_PATH_TEXT(
+        JSON_SERIALIZE(c.attributes),
+        'ClientGroup'
+    ) AS source_client_group,
+    f.attribute_client_group AS flattened_client_group,
+    CASE
+        WHEN JSON_EXTRACT_PATH_TEXT(
+                 JSON_SERIALIZE(c.attributes),
+                 'ClientGroup'
+             ) = f.attribute_client_group
+        THEN 'MATCH'
+        ELSE 'MISMATCH'
+    END AS validation_status
+FROM public.ctr AS c
+JOIN public.ctr_flattened AS f
+    ON c.contact_id = f.contact_id
+WHERE LENGTH(TRIM(f.attribute_client_group)) = 1
+ORDER BY c.last_update_timestamp DESC;
+
+
+SELECT
+    c.contact_id,
     c.attributes,
     f.attribute_client_group
 FROM public.ctr AS c
