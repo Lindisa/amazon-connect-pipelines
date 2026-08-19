@@ -1,4 +1,215 @@
 SELECT
+    SUM(CASE WHEN attribute_analytics_provider IS NOT NULL
+                  AND TRIM(attribute_analytics_provider) = '' THEN 1 ELSE 0 END)
+        AS attribute_analytics_provider_empty,
+
+    SUM(CASE WHEN attribute_caller_cif_key IS NOT NULL
+                  AND TRIM(attribute_caller_cif_key) = '' THEN 1 ELSE 0 END)
+        AS attribute_caller_cif_key_empty,
+
+    SUM(CASE WHEN attribute_caller_id_number IS NOT NULL
+                  AND TRIM(attribute_caller_id_number) = '' THEN 1 ELSE 0 END)
+        AS attribute_caller_id_number_empty,
+
+    SUM(CASE WHEN attribute_caller_id_type IS NOT NULL
+                  AND TRIM(attribute_caller_id_type) = '' THEN 1 ELSE 0 END)
+        AS attribute_caller_id_type_empty,
+
+    SUM(CASE WHEN attribute_caller_name IS NOT NULL
+                  AND TRIM(attribute_caller_name) = '' THEN 1 ELSE 0 END)
+        AS attribute_caller_name_empty,
+
+    SUM(CASE WHEN attribute_caller_phone_number IS NOT NULL
+                  AND TRIM(attribute_caller_phone_number) = '' THEN 1 ELSE 0 END)
+        AS attribute_caller_phone_number_empty,
+
+    SUM(CASE WHEN attribute_contact_flow_id IS NOT NULL
+                  AND TRIM(attribute_contact_flow_id) = '' THEN 1 ELSE 0 END)
+        AS attribute_contact_flow_id_empty,
+
+    SUM(CASE WHEN attribute_context_manager_session_id IS NOT NULL
+                  AND TRIM(attribute_context_manager_session_id) = '' THEN 1 ELSE 0 END)
+        AS attribute_context_manager_session_id_empty,
+
+    SUM(CASE WHEN attribute_customer_number IS NOT NULL
+                  AND TRIM(attribute_customer_number) = '' THEN 1 ELSE 0 END)
+        AS attribute_customer_number_empty,
+
+    SUM(CASE WHEN attribute_is_analytics_enabled IS NOT NULL
+                  AND TRIM(attribute_is_analytics_enabled) = '' THEN 1 ELSE 0 END)
+        AS attribute_is_analytics_enabled_empty,
+
+    SUM(CASE WHEN attribute_is_authenticated IS NOT NULL
+                  AND TRIM(attribute_is_authenticated) = '' THEN 1 ELSE 0 END)
+        AS attribute_is_authenticated_empty,
+
+    SUM(CASE WHEN attribute_is_chat_analytics_enabled IS NOT NULL
+                  AND TRIM(attribute_is_chat_analytics_enabled) = '' THEN 1 ELSE 0 END)
+        AS attribute_is_chat_analytics_enabled_empty,
+
+    SUM(CASE WHEN attribute_is_identified IS NOT NULL
+                  AND TRIM(attribute_is_identified) = '' THEN 1 ELSE 0 END)
+        AS attribute_is_identified_empty,
+
+    SUM(CASE WHEN attribute_is_screen_recording_enabled IS NOT NULL
+                  AND TRIM(attribute_is_screen_recording_enabled) = '' THEN 1 ELSE 0 END)
+        AS attribute_is_screen_recording_enabled_empty,
+
+    SUM(CASE WHEN attribute_is_speech_analytics_enabled IS NOT NULL
+                  AND TRIM(attribute_is_speech_analytics_enabled) = '' THEN 1 ELSE 0 END)
+        AS attribute_is_speech_analytics_enabled_empty,
+
+    SUM(CASE WHEN attribute_is_survey_enabled IS NOT NULL
+                  AND TRIM(attribute_is_survey_enabled) = '' THEN 1 ELSE 0 END)
+        AS attribute_is_survey_enabled_empty,
+
+    SUM(CASE WHEN attribute_survey_id IS NOT NULL
+                  AND TRIM(attribute_survey_id) = '' THEN 1 ELSE 0 END)
+        AS attribute_survey_id_empty,
+
+    SUM(CASE WHEN attribute_account_no IS NOT NULL
+                  AND TRIM(attribute_account_no) = '' THEN 1 ELSE 0 END)
+        AS attribute_account_no_empty,
+
+    SUM(CASE WHEN attribute_all_linked_accounts IS NOT NULL
+                  AND TRIM(attribute_all_linked_accounts) = '' THEN 1 ELSE 0 END)
+        AS attribute_all_linked_accounts_empty,
+
+    SUM(CASE WHEN attribute_chosen_account_object IS NOT NULL
+                  AND TRIM(attribute_chosen_account_object) = '' THEN 1 ELSE 0 END)
+        AS attribute_chosen_account_object_empty,
+
+    SUM(CASE WHEN attribute_cif_key IS NOT NULL
+                  AND TRIM(attribute_cif_key) = '' THEN 1 ELSE 0 END)
+        AS attribute_cif_key_empty,
+
+    SUM(CASE WHEN attribute_client_group IS NOT NULL
+                  AND TRIM(attribute_client_group) = '' THEN 1 ELSE 0 END)
+        AS attribute_client_group_empty,
+
+    SUM(CASE WHEN attribute_contact_flow_name IS NOT NULL
+                  AND TRIM(attribute_contact_flow_name) = '' THEN 1 ELSE 0 END)
+        AS attribute_contact_flow_name_empty,
+
+    SUM(CASE WHEN attribute_customer_id IS NOT NULL
+                  AND TRIM(attribute_customer_id) = '' THEN 1 ELSE 0 END)
+        AS attribute_customer_id_empty,
+
+    SUM(CASE WHEN attribute_eval_return_code IS NOT NULL
+                  AND TRIM(attribute_eval_return_code) = '' THEN 1 ELSE 0 END)
+        AS attribute_eval_return_code_empty,
+
+    SUM(CASE WHEN attribute_from_telephone_banking IS NOT NULL
+                  AND TRIM(attribute_from_telephone_banking) = '' THEN 1 ELSE 0 END)
+        AS attribute_from_telephone_banking_empty,
+
+    SUM(CASE WHEN attribute_home_language_code IS NOT NULL
+                  AND TRIM(attribute_home_language_code) = '' THEN 1 ELSE 0 END)
+        AS attribute_home_language_code_empty,
+
+    SUM(CASE WHEN attribute_id_number IS NOT NULL
+                  AND TRIM(attribute_id_number) = '' THEN 1 ELSE 0 END)
+        AS attribute_id_number_empty,
+
+    SUM(CASE WHEN attribute_pin_type IS NOT NULL
+                  AND TRIM(attribute_pin_type) = '' THEN 1 ELSE 0 END)
+        AS attribute_pin_type_empty,
+
+    SUM(CASE WHEN attribute_registration_status IS NOT NULL
+                  AND TRIM(attribute_registration_status) = '' THEN 1 ELSE 0 END)
+        AS attribute_registration_status_empty,
+
+    SUM(CASE WHEN attribute_sbu_segment IS NOT NULL
+                  AND TRIM(attribute_sbu_segment) = '' THEN 1 ELSE 0 END)
+        AS attribute_sbu_segment_empty,
+
+    SUM(CASE WHEN attribute_send_to IS NOT NULL
+                  AND TRIM(attribute_send_to) = '' THEN 1 ELSE 0 END)
+        AS attribute_send_to_empty,
+
+    SUM(CASE WHEN attribute_status_fica IS NOT NULL
+                  AND TRIM(attribute_status_fica) = '' THEN 1 ELSE 0 END)
+        AS attribute_status_fica_empty,
+
+    SUM(CASE WHEN attribute_fic_complete IS NOT NULL
+                  AND TRIM(attribute_fic_complete) = '' THEN 1 ELSE 0 END)
+        AS attribute_fic_complete_empty,
+
+    SUM(CASE WHEN call_data_default_ani IS NOT NULL
+                  AND TRIM(call_data_default_ani) = '' THEN 1 ELSE 0 END)
+        AS call_data_default_ani_empty,
+
+    SUM(CASE WHEN call_data_cif_key IS NOT NULL
+                  AND TRIM(call_data_cif_key) = '' THEN 1 ELSE 0 END)
+        AS call_data_cif_key_empty,
+
+    SUM(CASE WHEN call_data_id_number IS NOT NULL
+                  AND TRIM(call_data_id_number) = '' THEN 1 ELSE 0 END)
+        AS call_data_id_number_empty,
+
+    SUM(CASE WHEN call_data_connection_status IS NOT NULL
+                  AND TRIM(call_data_connection_status) = '' THEN 1 ELSE 0 END)
+        AS call_data_connection_status_empty,
+
+    SUM(CASE WHEN call_data_source_no IS NOT NULL
+                  AND TRIM(call_data_source_no) = '' THEN 1 ELSE 0 END)
+        AS call_data_source_no_empty,
+
+    SUM(CASE WHEN call_data_destination_no IS NOT NULL
+                  AND TRIM(call_data_destination_no) = '' THEN 1 ELSE 0 END)
+        AS call_data_destination_no_empty,
+
+    SUM(CASE WHEN call_data_queue_name IS NOT NULL
+                  AND TRIM(call_data_queue_name) = '' THEN 1 ELSE 0 END)
+        AS call_data_queue_name_empty,
+
+    SUM(CASE WHEN call_data_connection_id IS NOT NULL
+                  AND TRIM(call_data_connection_id) = '' THEN 1 ELSE 0 END)
+        AS call_data_connection_id_empty,
+
+    SUM(CASE WHEN call_data_context_id IS NOT NULL
+                  AND TRIM(call_data_context_id) = '' THEN 1 ELSE 0 END)
+        AS call_data_context_id_empty,
+
+    SUM(CASE WHEN call_data_is_identified IS NOT NULL
+                  AND TRIM(call_data_is_identified) = '' THEN 1 ELSE 0 END)
+        AS call_data_is_identified_empty,
+
+    SUM(CASE WHEN call_data_is_authenticated IS NOT NULL
+                  AND TRIM(call_data_is_authenticated) = '' THEN 1 ELSE 0 END)
+        AS call_data_is_authenticated_empty,
+
+    SUM(CASE WHEN tag_billing_cost_center IS NOT NULL
+                  AND TRIM(tag_billing_cost_center) = '' THEN 1 ELSE 0 END)
+        AS tag_billing_cost_center_empty,
+
+    SUM(CASE WHEN tag_billing_department IS NOT NULL
+                  AND TRIM(tag_billing_department) = '' THEN 1 ELSE 0 END)
+        AS tag_billing_department_empty,
+
+    SUM(CASE WHEN tag_billing_division IS NOT NULL
+                  AND TRIM(tag_billing_division) = '' THEN 1 ELSE 0 END)
+        AS tag_billing_division_empty,
+
+    SUM(CASE WHEN tag_speech_analytics IS NOT NULL
+                  AND TRIM(tag_speech_analytics) = '' THEN 1 ELSE 0 END)
+        AS tag_speech_analytics_empty,
+
+    SUM(CASE WHEN tag_aws_connect_instance_id IS NOT NULL
+                  AND TRIM(tag_aws_connect_instance_id) = '' THEN 1 ELSE 0 END)
+        AS tag_aws_connect_instance_id_empty,
+
+    SUM(CASE WHEN tag_aws_connect_system_endpoint IS NOT NULL
+                  AND TRIM(tag_aws_connect_system_endpoint) = '' THEN 1 ELSE 0 END)
+        AS tag_aws_connect_system_endpoint_empty
+FROM public.ctr_flattened;
+
+
+
+
+
+
+SELECT
     column_name,
     COUNT(*) AS empty_value_count
 FROM public.ctr_flattened
