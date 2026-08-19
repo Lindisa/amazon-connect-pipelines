@@ -1,3 +1,11 @@
+SELECT
+    attribute_client_group,
+    LENGTH(attribute_client_group) AS value_length,
+    ASCII(attribute_client_group) AS ascii_code
+FROM public.ctr_flattened
+WHERE attribute_client_group IS NOT NULL
+  AND LENGTH(TRIM(attribute_client_group)) = 1;
+
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
