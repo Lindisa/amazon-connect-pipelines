@@ -1,4 +1,60 @@
 SELECT
+    column_name,
+    COUNT(*) AS empty_value_count
+FROM (
+    SELECT
+        -- paste the complete string-column list here
+        aws_account_id,
+        aws_contact_trace_record_format_version,
+        contact_id,
+        contact_association_id,
+        initial_contact_id,
+        previous_contact_id,
+        next_contact_id,
+        related_contact_id,
+        instance_arn,
+        channel,
+        initiation_method,
+        disconnect_reason,
+        answering_machine_detection_status,
+
+        -- Agent, campaign, endpoints, queue, recording,
+        -- Contact Lens, Attributes, callData, Tags,
+        -- Segment fields and source_file from the previous list
+        source_file
+    FROM public.ctr_flattened
+) string_columns
+UNPIVOT (
+    column_value FOR column_name IN (
+        -- paste the exact same complete string-column list here
+        aws_account_id,
+        aws_contact_trace_record_format_version,
+        contact_id,
+        contact_association_id,
+        initial_contact_id,
+        previous_contact_id,
+        next_contact_id,
+        related_contact_id,
+        instance_arn,
+        channel,
+        initiation_method,
+        disconnect_reason,
+        answering_machine_detection_status,
+
+        -- same remaining columns
+        source_file
+    )
+)
+WHERE TRIM(column_value) = ''
+GROUP BY column_name
+ORDER BY empty_value_count DESC, column_name;
+
+
+
+
+
+
+SELECT
     SUM(CASE WHEN attribute_analytics_provider IS NOT NULL
                   AND TRIM(attribute_analytics_provider) = '' THEN 1 ELSE 0 END)
         AS attribute_analytics_provider_empty,
