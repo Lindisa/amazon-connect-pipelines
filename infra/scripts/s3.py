@@ -1,4 +1,15 @@
 SELECT
+    c.contact_id,
+    c.attributes,
+    f.attribute_client_group
+FROM public.ctr AS c
+JOIN public.ctr_flattened AS f
+    ON c.contact_id = f.contact_id
+WHERE LENGTH(TRIM(f.attribute_client_group)) = 1
+ORDER BY c.last_update_timestamp DESC;
+
+
+SELECT
     contact_id,
     attributes,
     attribute_client_group
