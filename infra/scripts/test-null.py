@@ -12,8 +12,8 @@ SELECT LISTAGG(
     || 'HAVING COUNT(*) > 0',
     ' UNION ALL '
 ) WITHIN GROUP (ORDER BY ordinal_position) AS validation_query
-FROM information_schema.columns
-WHERE table_schema = 'public'
+FROM svv_columns
+WHERE schema_name = 'public'
   AND table_name = 'ctr_flattened'
   AND data_type IN (
       'character varying',
