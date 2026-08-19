@@ -1,3 +1,28 @@
+SELECT LISTAGG(
+    'SELECT '''
+    || column_name
+    || ''' AS column_name, COUNT(*) AS empty_value_count '
+    || 'FROM public.ctr_flattened '
+    || 'WHERE "'
+    || column_name
+    || '" IS NOT NULL '
+    || 'AND TRIM("'
+    || column_name
+    || '") = '''' '
+    || 'HAVING COUNT(*) > 0',
+    ' UNION ALL '
+) WITHIN GROUP (ORDER BY ordinal_position) AS validation_query
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'ctr_flattened'
+  AND data_type IN (
+      'character varying',
+      'character',
+      'varchar',
+      'text'
+  );
+
+
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
