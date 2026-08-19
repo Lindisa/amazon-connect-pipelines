@@ -1,25 +1,27 @@
 SELECT LISTAGG(
     'SELECT '''
-    || "column"
+    || column_name
     || ''' AS column_name, COUNT(*) AS empty_value_count '
     || 'FROM public.ctr_flattened '
     || 'WHERE "'
-    || "column"
+    || column_name
     || '" IS NOT NULL '
     || 'AND TRIM("'
-    || "column"
+    || column_name
     || '") = '''' '
     || 'HAVING COUNT(*) > 0',
     ' UNION ALL '
-) WITHIN GROUP (ORDER BY "column") AS validation_query
-FROM pg_table_def
-WHERE schemaname = 'public'
-  AND tablename = 'ctr_flattened'
+) WITHIN GROUP (
+    ORDER BY ordinal_position
+) AS validation_query
+FROM svv_redshift_columns
+WHERE schema_name = 'public'
+  AND table_name = 'ctr_flattened'
   AND (
-      type LIKE 'character varying%'
-      OR type LIKE 'varchar%'
-      OR type LIKE 'character%'
-      OR type LIKE 'text%'
+      data_type LIKE 'character varying%'
+      OR data_type LIKE 'varchar%'
+      OR data_type LIKE 'character%'
+      OR data_type LIKE 'text%'
   );
 
 
