@@ -1,3 +1,44 @@
+The new hierarchy extraction is working. The row showing `Absa South Africa` under Level 1 confirms that the JSON was successfully flattened. The other levels are `NULL` because those hierarchy levels are absent for that record.
+
+Check how many values were populated at every level:
+
+```sql
+SELECT
+    COUNT(*) AS total_rows,
+    COUNT(agent_hierarchy_groups) AS rows_with_hierarchy_json,
+    COUNT(agent_hierarchy_level_1_group_name) AS level_1_count,
+    COUNT(agent_hierarchy_level_2_group_name) AS level_2_count,
+    COUNT(agent_hierarchy_level_3_group_name) AS level_3_count,
+    COUNT(agent_hierarchy_level_4_group_name) AS level_4_count,
+    COUNT(agent_hierarchy_level_5_group_name) AS level_5_count
+FROM public.ctr_flattened;
+```
+
+Then display records containing any expanded hierarchy value:
+
+```sql
+SELECT
+    contact_id,
+    agent_hierarchy_level_1_group_name,
+    agent_hierarchy_level_2_group_name,
+    agent_hierarchy_level_3_group_name,
+    agent_hierarchy_level_4_group_name,
+    agent_hierarchy_level_5_group_name,
+    agent_hierarchy_groups
+FROM public.ctr_flattened
+WHERE agent_hierarchy_level_1_group_name IS NOT NULL
+   OR agent_hierarchy_level_2_group_name IS NOT NULL
+   OR agent_hierarchy_level_3_group_name IS NOT NULL
+   OR agent_hierarchy_level_4_group_name IS NOT NULL
+   OR agent_hierarchy_level_5_group_name IS NOT NULL
+LIMIT 100;
+```
+
+
+
+
+
+
 DROP TABLE IF EXISTS public.ctr_flattened_staging;
 DROP TABLE IF EXISTS public.ctr_flattened;
 
