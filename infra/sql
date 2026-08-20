@@ -1,3 +1,54 @@
+DROP PROCEDURE IF EXISTS check_empty_strings();
+
+CREATE OR REPLACE PROCEDURE check_empty_strings()
+AS $$
+DECLARE
+    col RECORD;
+    sql_text VARCHAR(65535);
+BEGIN
+    DROP TABLE IF EXISTS empty_string_results;
+
+    CREATE TEMP TABLE empty_string_results (
+        column_name       VARCHAR(256),
+        empty_value_count BIGINT
+    );
+
+    FOR col IN
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'ctr_flattened'
+          AND data_type IN (
+              'character varying',
+              'character',
+              'varchar',
+              'char',
+              'text'
+          )
+        ORDER BY ordinal_position
+    LOOP
+        sql_text :=
+            'INSERT INTO empty_string_results ' ||
+            'SELECT ''' || col.column_name || ''', COUNT(*) ' ||
+            'FROM public.ctr_flattened ' ||
+            'WHERE ' || col.column_name || ' IS NOT NULL ' ||
+            'AND TRIM(' || col.column_name || ') = '''';';
+
+        EXECUTE sql_text;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+CALL check_empty_strings();
+
+SELECT
+    column_name,
+    empty_value_count
+FROM empty_string_results
+WHERE empty_value_count > 0
+ORDER BY empty_value_count DESC, column_name;
+
+
 SELECT
     evaluation_id,
     COUNT(*) AS record_count
