@@ -12,6 +12,16 @@ partition_hours = [
     for offset in range(48)
 ]
 
+partition_predicate = " OR ".join(
+    (
+        f"(year = '{partition_time:%Y}' "
+        f"AND month = '{partition_time:%m}' "
+        f"AND day = '{partition_time:%d}' "
+        f"AND hour = '{partition_time:%H}')"
+    )
+    for partition_time in partition_hours
+)
+
 print(
     f"Backfill partition range: "
     f"{partition_hours[0]:%Y-%m-%d %H}:00 to "
