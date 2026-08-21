@@ -1,1 +1,23 @@
+backfill_start = datetime(
+    2026,
+    8,
+    20,
+    0,
+    0,
+    tzinfo=timezone.utc,
+)
 
+partition_hours = [
+    backfill_start + timedelta(hours=offset)
+    for offset in range(48)
+]
+
+partition_predicate = " OR ".join(
+    (
+        f"(year = '{partition_time:%Y}' "
+        f"AND month = '{partition_time:%m}' "
+        f"AND day = '{partition_time:%d}' "
+        f"AND hour = '{partition_time:%H}')"
+    )
+    for partition_time in partition_hours
+)
