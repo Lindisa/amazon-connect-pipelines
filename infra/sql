@@ -1,3 +1,76 @@
+Use this to compare the original UTC timestamp with the expected and actual SAST value:
+
+```sql
+WITH ctr_latest AS (
+    SELECT
+        contact_id,
+        initiation_timestamp,
+        last_update_timestamp,
+        ROW_NUMBER() OVER (
+            PARTITION BY contact_id
+            ORDER BY last_update_timestamp DESC
+        ) AS rn
+    FROM public.ctr
+    WHERE initiation_timestamp >= DATEADD(day, -1, GETDATE())
+)
+SELECT
+    c.contact_id,
+    c.initiation_timestamp                    AS source_utc,
+    DATEADD(hour, 2, c.initiation_timestamp) AS expected_sast,
+    f.initiation_timestamp                    AS flattened_timestamp,
+    CASE
+        WHEN f.initiation_timestamp =
+             DATEADD(hour, 2, c.initiation_timestamp)
+        THEN 'MATCH'
+        ELSE 'MISMATCH'
+    END AS validation_status
+FROM ctr_latest c
+JOIN public.ctr_flattened f
+    ON c.contact_id = f.contact_id
+WHERE c.rn = 1
+ORDER BY c.initiation_timestamp DESC
+LIMIT 100;
+```
+
+For an overall result:
+
+```sql
+WITH ctr_latest AS (
+    SELECT
+        contact_id,
+        initiation_timestamp,
+        last_update_timestamp,
+        ROW_NUMBER() OVER (
+            PARTITION BY contact_id
+            ORDER BY last_update_timestamp DESC
+        ) AS rn
+    FROM public.ctr
+    WHERE initiation_timestamp >= DATEADD(day, -1, GETDATE())
+)
+SELECT
+    CASE
+        WHEN f.initiation_timestamp =
+             DATEADD(hour, 2, c.initiation_timestamp)
+        THEN 'MATCH'
+        ELSE 'MISMATCH'
+    END AS validation_status,
+    COUNT(*) AS record_count
+FROM ctr_latest c
+JOIN public.ctr_flattened f
+    ON c.contact_id = f.contact_id
+WHERE c.rn = 1
+GROUP BY 1;
+```
+
+The successful result should show the flattened timestamp exactly **two hours ahead** of the source UTC timestamp.
+
+
+
+
+
+
+
+
 DROP PROCEDURE IF EXISTS check_empty_strings();
 
 CREATE OR REPLACE PROCEDURE check_empty_strings()
