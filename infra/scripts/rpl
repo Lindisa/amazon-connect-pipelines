@@ -1,0 +1,23 @@
+Hi Salesh,
+
+As discussed, please find the RPL application form attached.
+
+The application requires a brief testimonial/validation letter from senior management confirming my workplace knowledge, skills and experience. The letter could briefly confirm my role as a Specialist Product Engineer, that I joined the team in late March 2026, and the technical work and competencies you have observed.
+
+For reference, some of the work I have completed includes:
+
+* Amazon Connect Security Profiles — implemented the required access and security-profile configuration, promoted the changes to Production, verified the deployment and supported business readiness for Contact Lens onboarding.
+* CIB General Helpdesk and Diamond ACD Announcements — updated the General Helpdesk and eight Diamond support-line contact flows with Mobile Access App messaging, managed the Git/IaC changes and environment promotions, performed call-based validation and resolved an environment-specific messaging discrepancy.
+* Stop Card Announcement Enhancement — implemented wording and pronunciation changes, supported business testing and sign-off, and deployed the approved change to Production.
+* Relationship Banking IVR Enhancement — removed the repeated fallthrough announcement and introduced environment-specific Terraform/configuration handling for safe non-production testing.
+* HRCC ACD Enhancement (RITM1025904) — analysed and updated the HRCC call flows and messaging, incorporated additional business information, addressed SIT feedback and managed the changes through Git and Terraform.
+* Designed and implemented the Contact Lens, Contact Evaluations and CTR Flattened data pipelines using AWS Glue, S3, Redshift, Python, Terraform and GitHub Actions.
+
+The testimonial can focus on the areas you consider most relevant, including cloud engineering, software and data engineering, infrastructure as code, problem-solving, testing, deployment and stakeholder collaboration.
+
+Please let me know if you need any additional information from me.
+
+Thank you again for assisting me.
+
+Kind regards,
+Lindisa
