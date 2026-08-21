@@ -116,7 +116,7 @@ spark = glue_context.spark_session
 job = Job(glue_context)
 job.init(args["JOB_NAME"], args)
 
-spark.conf.set("spark.sql.session.timeZone", "UTC")
+spark.conf.set("spark.sql.session.timeZone", "Africa/Johannesburg")
 spark.conf.set("spark.sql.legacy.timeParserPolicy", "CORRECTED")
 # Invalid scalar casts must return NULL instead of failing the load.
 spark.conf.set("spark.sql.ansi.enabled", "false")
